@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>STICKMAN ROGUELIKE · Colyseus client</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="hud-left">
+    <div id="playersHud"></div>
+    <div id="levelRow">
+      <span class="lvl">LV <b id="lvlNum">1</b></span>
+      <div class="xpbar"><i id="xpFill"></i></div>
+      <span id="xpNum">0/30</span>
+    </div>
+  </div>
+
+  <div id="centerHud">
+    <div id="waveLbl">ВОЛНА 1</div>
+    <div id="comboLbl"></div>
+    <div id="enemyLbl">ВРАГОВ 0</div>
+  </div>
+
+  <div id="rightHud">
+    <div id="coinLbl">◆ 0</div>
+    <div id="scoreLbl">★ 0</div>
+    <div class="hud-row">
+      <button id="muteBtn" class="hud-btn" type="button" title="Звук (M)">🔊</button>
+      <button id="btnLeave" class="hud-btn" type="button">В МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<div id="bossBar" class="hidden">
+  <div id="bossLabel">БОСС</div>
+  <div class="bossbar"><i id="bossHp"></i></div>
+</div>
+
+<div id="menu" class="overlay show">
+  <div class="menu-box">
+    <h1>STICKMAN <span>ROGUELIKE</span></h1>
+    <p class="sub">2–8 игроков · волны · магазин · авторитетный сервер Colyseus</p>
+
+    <div class="fields">
+      <label>ИМЯ
+        <input id="nameInput" maxlength="14" placeholder="Игрок" autocomplete="off">
+      </label>
+      <label>СЕРВЕР
+        <input id="serverInput" placeholder="wss://ВАШ-СЕРВЕР.sslip.io" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+
+    <div class="buttons">
+      <button id="btnDemo" class="primary" type="button">▶ ДЕМО БЕЗ СЕРВЕРА</button>
+      <button id="btnConnect" class="alt" type="button">ПОДКЛЮЧИТЬСЯ</button>
+      <button id="btnHelp" class="alt" type="button">? УПРАВЛЕНИЕ</button>
+    </div>
+
+    <div id="menuStatus"></div>
+
+    <div class="note">
+      Серверная часть ещё не развёрнута — проверь клиент в демо-режиме.
+      Когда VPS будет готов, укажи адрес Colyseus-сервера (<b>wss://…</b>).
+    </div>
+
+    <div class="keys">A/D — движение · Space — прыжок · Shift — рывок · J — удар · K — выстрел</div>
+  </div>
+</div>
+
+<div id="shop" class="overlay">
+  <div class="menu-box">
+    <h1>МАГАЗИН</h1>
+    <p class="sub">Улучшения между волнами. Монеты общие — тратьте с умом.</p>
+    <div id="shopCoins">◆ 0</div>
+    <div class="shop-grid" id="shopOffers"></div>
+    <div id="shopStatus"></div>
+    <div class="buttons">
+      <button id="btnShopReady" class="primary" type="button">ГОТОВ [ПРОБЕЛ]</button>
+    </div>
+  </div>
+</div>
+
+<div id="tutorial" class="overlay">
+  <div class="menu-box">
+    <h1>УПРАВЛЕНИЕ</h1>
+    <div class="tut-body">
+      <div class="tut-col">
+        <h3>КЛАВИАТУРА</h3>
+        <div class="row"><b>A / D / ← →</b> — движение</div>
+        <div class="row"><b>W / Space / ↑</b> — прыжок (двойной после улучшения)</div>
+        <div class="row"><b>Shift</b> — рывок</div>
+        <div class="row"><b>J / Z</b> — удар</div>
+        <div class="row"><b>K / X</b> — выстрел</div>
+        <div class="row"><b>Space / 1–3</b> — магазин</div>
+      </div>
+      <div class="tut-col">
+        <h3>СОВЕТЫ</h3>
+        <div class="row">Монеты общие · рывок даёт неуязвимость</div>
+        <div class="row">Если напарник упал — стой рядом и поднимай</div>
+        <div class="row">Каждая 5-я волна — босс</div>
+        <div class="row">Серия убийств повышает очки</div>
+        <div class="row">Криты, магнит и двойной прыжок — в магазине</div>
+      </div>
+    </div>
+    <div class="buttons"><button id="btnTutorialOk" class="primary" type="button">ПОНЯТНО</button></div>
+  </div>
+</div>
+
+<div id="gameover" class="overlay">
+  <div class="menu-box">
+    <h1>ЗАБЕГ ОКОНЧЕН</h1>
+    <div id="goStats"></div>
+    <div class="buttons">
+      <button id="btnRestart" class="primary" type="button">ЗАНОВО</button>
+      <button id="btnGoMenu" class="alt" type="button">В МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<div id="touchControls" class="hidden">
+  <div class="tc-left">
+    <button class="tc-btn tc-jump" data-act="jump" type="button"><span class="tc-icon">▲</span></button>
+    <div class="tc-move">
+      <button class="tc-btn" data-act="left" type="button"><span class="tc-icon">◀</span></button>
+      <button class="tc-btn" data-act="right" type="button"><span class="tc-icon">▶</span></button>
+    </div>
+  </div>
+  <div class="tc-right">
+    <button class="tc-btn tc-atk" data-act="attack" type="button"><span class="tc-icon">⚔</span><span class="tc-label">УДАР</span></button>
+    <button class="tc-btn tc-shoot" data-act="shoot" type="button"><span class="tc-icon">➤</span><span class="tc-label">ВЫСТРЕЛ</span></button>
+    <button class="tc-btn tc-dash" data-act="dash" type="button"><span class="tc-icon">≫</span><span class="tc-label">РЫВОК</span></button>
+  </div>
+</div>
+
+<script src="vendor/colyseus.js"></script>
+<script src="js/config.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
