@@ -27,7 +27,7 @@ const SPAWNS = [
 /* Игроки                                                              */
 /* ------------------------------------------------------------------ */
 
-export function makePlayer(def, index = 0) {
+export function makePlayer(def, index = 0, solo = false) {
   const p = {
     id: def.id,
     name: def.name || 'Игрок',
@@ -54,9 +54,9 @@ export function makePlayer(def, index = 0) {
     intent: emptyInput(),
     shopLevels: {}, shopOffers: [], ready: false,
     kills: 0, score: 0,
-    weapon: index % 2 === 0 ? 'sword' : 'gun',
+    weapon: !solo && index % 2 === 1 ? 'gun' : 'sword',
   };
-  applyClassBonus(p, index);
+  if (!solo) applyClassBonus(p, index);
   return p;
 }
 
@@ -75,8 +75,11 @@ function applyClassBonus(p, index) {
   }
 }
 
-export function createWorld(playerDefs) {
+export function createWorld(playerDefs, opts = {}) {
+  const solo = !!opts.solo;
   const world = {
+    solo,
+    playerCount: playerDefs.length,
     wave: 0,
     status: 'playing',     // playing | shop | game_over
     phase: 'intermission', // intermission | fight | clear | shop | game_over
@@ -110,13 +113,13 @@ export function createWorld(playerDefs) {
     nextId: 1,
   };
   playerDefs.forEach((def, i) => {
-    world.players[def.id] = makePlayer(def, i);
+    world.players[def.id] = makePlayer(def, i, solo);
   });
   return world;
 }
 
-export function resetWorld(world, playerDefs) {
-  const fresh = createWorld(playerDefs);
+export function resetWorld(world, playerDefs, opts = {}) {
+  const fresh = createWorld(playerDefs, opts);
   for (const k of Object.keys(world)) delete world[k];
   Object.assign(world, fresh);
   return world;
@@ -583,6 +586,8 @@ function createEnemy(world, sp) {
   const T = ENEMY_TYPES[sp.type];
   let hpMult = Math.min(1 + (world.wave - 1) * 0.06, 2.8);
   let spdMult = Math.min(1 + (world.wave - 1) * 0.018, 1.8);
+  if (world.solo) hpMult *= 0.9;
+  else if (world.playerCount > 2) hpMult *= 1 + (world.playerCount - 2) * 0.06;
   if (sp.type === 'boss') {
     const bossWave = Math.floor(world.wave / 5);
     hpMult *= 1 + bossWave * 0.7;
@@ -1049,9 +1054,18 @@ function spawnWave(world, n) {
     const minions = Math.min(2 + Math.floor(n / 5), 5);
     for (let i = 0; i < minions; i++) list.push('grunt');
   } else {
-    const grunts = Math.min(2 + Math.floor(n * 0.9), 9);
-    const brutes = n >= 2 ? Math.min(Math.floor((n - 1) * 0.5), 3) : 0;
-    const throwers = n >= 3 ? Math.min(Math.floor(n / 4) + 1, 2) : 0;
+    const solo = !!world.solo;
+    const extra = Math.max(0, (world.playerCount || 1) - 2);
+    const grunts = Math.min(
+      (solo ? 1 : 2) + Math.floor(n * (solo ? 0.7 : 0.9)) + (solo ? 0 : extra),
+      solo ? 7 : 12,
+    );
+    const brutes = n >= 3
+      ? Math.min(Math.floor((n - 1) * 0.5) + (solo ? 0 : extra), solo ? 2 : 4)
+      : 0;
+    const throwers = n >= 3
+      ? Math.min(Math.floor(n / 4) + 1 + (solo ? 0 : Math.floor(extra / 2)), solo ? 1 : 3)
+      : 0;
     for (let i = 0; i < grunts; i++) list.push('grunt');
     for (let i = 0; i < brutes; i++) list.push('brute');
     for (let i = 0; i < throwers; i++) list.push('thrower');

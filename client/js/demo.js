@@ -1,5 +1,5 @@
-// Демо-режим: симуляция прямо в браузере (пока нет Colyseus-сервера).
-// Механика и вид — из предыдущей версии игры.
+// Демо/соло-режим: симуляция прямо в браузере (пока нет Colyseus-сервера).
+// Внешность и механика — из предыдущей версии.
 
 import {
   createWorld, resetWorld, step, buyOffer, setReady,
@@ -10,20 +10,24 @@ const emptyInput = () => ({
   left: false, right: false, jump: false, dash: false, attack: false, shoot: false,
 });
 
-export function createDemo({ name, onState, onGameOver }) {
+export function createDemo({ name, solo, onState, onGameOver }) {
   const selfId = 'local-' + Math.random().toString(36).slice(2, 8);
-  const defs = [
-    { id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0] },
-    { id: 'bot-alpha', name: 'Бот Альфа', color: PLAYER_COLORS[1] },
-    { id: 'bot-beta', name: 'Бот Бета', color: PLAYER_COLORS[2] },
-  ];
+  const defs = solo
+    ? [{ id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0] }]
+    : [
+        { id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0] },
+        { id: 'bot-alpha', name: 'Бот Альфа', color: PLAYER_COLORS[1] },
+        { id: 'bot-beta', name: 'Бот Бета', color: PLAYER_COLORS[2] },
+      ];
 
-  const world = createWorld(defs);
+  const world = createWorld(defs, { solo: !!solo });
   const DT = 1 / TICK_RATE;
+  const botIds = solo ? [] : ['bot-alpha', 'bot-beta'];
   let localInput = emptyInput();
   let timer = null;
   let reported = false;
   let shopSeen = false;
+  let paused = false;
   const botTimers = { 'bot-alpha': 0, 'bot-beta': 0 };
 
   function enterShop() {
@@ -33,7 +37,7 @@ export function createDemo({ name, onState, onGameOver }) {
   }
 
   function tickShop() {
-    for (const id of ['bot-alpha', 'bot-beta']) {
+    for (const id of botIds) {
       const p = world.players[id];
       if (!p || p.dead || p.ready) continue;
       botTimers[id] -= DT;
@@ -52,6 +56,11 @@ export function createDemo({ name, onState, onGameOver }) {
   }
 
   function tick() {
+    if (paused) {
+      onState(world);
+      return;
+    }
+
     if (world.status === 'shop') {
       if (!shopSeen) enterShop();
       tickShop();
@@ -60,7 +69,7 @@ export function createDemo({ name, onState, onGameOver }) {
     }
 
     const inputs = { [selfId]: localInput };
-    for (const id of ['bot-alpha', 'bot-beta']) {
+    for (const id of botIds) {
       const p = world.players[id];
       if (p && !p.dead && !p.downed) inputs[id] = botInput(world, p);
     }
@@ -80,6 +89,7 @@ export function createDemo({ name, onState, onGameOver }) {
   return {
     sessionId: selfId,
     isDemo: true,
+    isSolo: !!solo,
     sendInput(input) {
       localInput = { ...emptyInput(), ...input };
     },
@@ -89,10 +99,18 @@ export function createDemo({ name, onState, onGameOver }) {
     ready() {
       setReady(world, selfId);
     },
+    setPaused(value) {
+      if (!solo) return;
+      paused = !!value;
+    },
+    get paused() {
+      return paused;
+    },
     restart() {
-      resetWorld(world, defs);
+      resetWorld(world, defs, { solo: !!solo });
       reported = false;
       shopSeen = false;
+      paused = false;
       localInput = emptyInput();
       onState(world);
     },
@@ -106,6 +124,15 @@ export function createDemo({ name, onState, onGameOver }) {
 function botInput(world, p) {
   const enemies = Object.values(world.enemies).filter((e) => e.alive);
   const input = emptyInput();
+
+  // Приоритет — поднять упавшего напарника.
+  const downed = Object.values(world.players).find((o) => o !== p && o.downed && !o.dead);
+  if (downed) {
+    const dx = downed.x - p.x;
+    if (dx < -20) input.left = true;
+    else if (dx > 20) input.right = true;
+    return input;
+  }
 
   if (!enemies.length) {
     const targetX = 640;

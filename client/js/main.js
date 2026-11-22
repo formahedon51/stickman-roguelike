@@ -15,10 +15,13 @@ let state = null;
 let selfId = null;
 let active = false;
 let inputTimer = null;
+let paused = false;
 
 const ui = createUI({
+  onSolo: startSolo,
   onDemo: startDemo,
   onConnect: startConnect,
+  onPause: togglePause,
   onRestart: () => {
     if (!session) return;
     session.restart();
@@ -37,12 +40,17 @@ function begin(adapter) {
   session = adapter;
   selfId = adapter.sessionId;
   active = true;
+  paused = false;
 
   ui.hideMenu();
   ui.showHud();
   ui.hideGameOver();
   ui.hideShop();
+  ui.setPaused(false);
   ui.setMenuStatus('');
+
+  const pauseBtn = document.getElementById('pauseBtn');
+  if (pauseBtn) pauseBtn.style.display = adapter.isSolo ? '' : 'none';
 
   clearInterval(inputTimer);
   let prevInput = input.snapshot();
@@ -59,15 +67,32 @@ function begin(adapter) {
   }, 1000 / 30);
 }
 
-function startDemo() {
+function startLocal(solo) {
   if (session) leaveSession();
   const name = ui.getName();
   const adapter = createDemo({
     name,
+    solo,
     onState: (s) => { state = s; },
     onGameOver: (stats) => ui.showGameOver(stats),
   });
   begin(adapter);
+}
+
+function startSolo() {
+  startLocal(true);
+}
+
+function startDemo() {
+  startLocal(false);
+}
+
+function togglePause() {
+  if (!session || !session.isSolo) return;
+  if (!state || state.status !== 'playing') return;
+  paused = !paused;
+  session.setPaused(paused);
+  ui.setPaused(paused);
 }
 
 async function startConnect() {
@@ -104,9 +129,11 @@ async function startConnect() {
 function leaveSession(message) {
   const s = session;
   active = false;
+  paused = false;
   session = null;
   state = null;
   selfId = null;
+  ui.setPaused(false);
 
   clearInterval(inputTimer);
   inputTimer = null;
@@ -175,9 +202,14 @@ if (muteBtn) {
   });
 }
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM' && e.target && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.code === 'KeyM') {
     const m = audio.toggle();
     if (muteBtn) muteBtn.textContent = m ? '🔇' : '🔊';
+  }
+  if ((e.code === 'Escape' || e.code === 'KeyP') && session && session.isSolo) {
+    e.preventDefault();
+    togglePause();
   }
 });
 

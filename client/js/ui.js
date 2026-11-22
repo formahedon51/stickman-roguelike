@@ -8,17 +8,22 @@ function fmtTime(seconds) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady }) {
+export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, onReady, onPause }) {
   const els = {
     menu: $('menu'),
     hud: $('hud'),
     gameover: $('gameover'),
+    pause: $('pause'),
     menuStatus: $('menuStatus'),
     name: $('nameInput'),
     server: $('serverInput'),
+    btnSolo: $('btnSolo'),
     btnDemo: $('btnDemo'),
     btnConnect: $('btnConnect'),
     btnHelp: $('btnHelp'),
+    btnPause: $('pauseBtn'),
+    btnResume: $('btnResume'),
+    btnPauseMenu: $('btnPauseMenu'),
     players: $('playersHud'),
     lvl: $('lvlNum'),
     xpFill: $('xpFill'),
@@ -95,7 +100,11 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
   }
 
   try {
-    if (localStorage.getItem('rg_tut') !== '1') setTimeout(showTutorial, 400);
+    if (localStorage.getItem('rg_tut') !== '1') {
+      setTimeout(() => {
+        if (localStorage.getItem('rg_tut') !== '1') showTutorial();
+      }, 400);
+    }
   } catch (e) { /* noop */ }
 
   function showGameOver(stats) {
@@ -147,8 +156,10 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
   function updatePlayers(state, selfId) {
     const players = state.players || {};
     const seen = new Set();
+    let index = 0;
 
     for (const p of Object.values(players)) {
+      index += 1;
       seen.add(p.id);
       let row = rows.get(p.id);
       if (!row) {
@@ -159,7 +170,7 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
       const color = p.color || '#4aa3ff';
       const pct = clamp((p.hp || 0) / (p.maxHp || 100), 0, 1);
       row.dot.style.background = color;
-      row.name.textContent = p.name || 'Игрок';
+      row.name.textContent = 'P' + index + ' · ' + (p.name || 'Игрок');
       row.fill.style.width = Math.round(pct * 100) + '%';
       row.fill.style.background = color;
       row.hp.textContent = Math.max(0, Math.round(p.hp || 0)) + '/' + Math.round(p.maxHp || 100);
@@ -197,6 +208,16 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
     if (!p) return;
 
     els.shopCoins.textContent = '◆ ' + (state.coins || 0);
+
+    if (p.dead) {
+      els.shopOffers.innerHTML = '';
+      shopKey = '';
+      els.shopStatus.textContent = 'Вы выбыли. Наблюдайте за командой.';
+      els.btnShopReady.disabled = true;
+      els.btnShopReady.textContent = 'ВЫБЫЛИ';
+      return;
+    }
+
     const offers = p.shopOffers || [];
     const key = offers.map((o) => o.upg && o.upg.id).join(',');
     if (key !== shopKey) {
@@ -275,8 +296,12 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
     }
   }
 
+  els.btnSolo.addEventListener('click', () => { savePrefs(); onSolo(); });
   els.btnDemo.addEventListener('click', () => { savePrefs(); onDemo(); });
   els.btnConnect.addEventListener('click', () => { savePrefs(); onConnect(); });
+  els.btnPause.addEventListener('click', onPause);
+  els.btnResume.addEventListener('click', onPause);
+  els.btnPauseMenu.addEventListener('click', onMenu);
   els.btnHelp.addEventListener('click', showTutorial);
   els.btnTutorialOk.addEventListener('click', closeTutorial);
   els.tutorial.addEventListener('click', (e) => {
@@ -310,6 +335,9 @@ export function createUI({ onDemo, onConnect, onRestart, onMenu, onBuy, onReady 
     showGameOver,
     hideGameOver,
     hideShop,
+    setPaused(value) {
+      els.pause.classList.toggle('show', !!value);
+    },
     updateHud,
     savePrefs,
   };

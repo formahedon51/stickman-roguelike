@@ -467,6 +467,15 @@ button.alt:hover {
   opacity: .85;
 }
 .tut-col .row b { color: #e8eef7; font-weight: 600; }
+.tut-tips {
+  font-size: 12px;
+  line-height: 1.9;
+  opacity: .75;
+  max-width: 660px;
+  margin: 4px 0;
+  letter-spacing: .4px;
+}
+.tut-tips b { color: #ffd54f; }
 
 /* ---------- result ---------- */
 
