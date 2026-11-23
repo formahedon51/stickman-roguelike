@@ -4,10 +4,10 @@ import {
   ARENA, SOLIDS, PLAYER, ENEMY_TYPES, GRAVITY, MAX_ACTIVE_ENEMIES,
   COMBO_TIME, REVIVE_RANGE, REVIVE_TIME, REVIVE_BLEEDOUT, REVIVE_HP_PCT,
   WAVE_TIME_LIMIT, MAX_PARTICLES, PLAYER_COLORS,
-} from './constants.js';
-import { RARITY_MULT, rollOffers } from './upgrades.js';
-import { applyClass } from './classes.js';
-import { getWeapon } from './weapons.js';
+} from './constants.js?v=20261123';
+import { RARITY_MULT, rollOffers } from './upgrades.js?v=20261123';
+import { applyClass } from './classes.js?v=20261123';
+import { getWeapon } from './weapons.js?v=20261123';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;

@@ -1,6 +1,6 @@
 // Магазинные улучшения, редкости и разблокировка оружия.
 
-import { addWeapon, getWeapon } from './weapons.js';
+import { addWeapon, getWeapon } from './weapons.js?v=20261123';
 
 export const RARITY_COLOR = {
   common: '#aaaaaa',

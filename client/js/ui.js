@@ -1,6 +1,6 @@
-import { RARITY_LABEL, RARITY_COLOR } from '../shared/upgrades.js';
-import { CLASSES, CLASS_LIST } from '../shared/classes.js';
-import { getWeapon } from '../shared/weapons.js';
+import { RARITY_LABEL, RARITY_COLOR } from '../shared/upgrades.js?v=20261123';
+import { CLASSES, CLASS_LIST } from '../shared/classes.js?v=20261123';
+import { getWeapon } from '../shared/weapons.js?v=20261123';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);

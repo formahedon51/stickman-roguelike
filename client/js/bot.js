@@ -1,8 +1,8 @@
 // Умный авто-бот: сам выбирает цель, оружие, уклоняется и покупает улучшения.
 // Не трогает DOM, поэтому его легко тестировать и прогонять на скорость.
 
-import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js';
-import { ARENA } from '../shared/constants.js';
+import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js?v=20261123';
+import { ARENA } from '../shared/constants.js?v=20261123';
 
 const centerX = (e) => e.x + e.w / 2;
 const centerY = (e) => e.y + e.h / 2;
