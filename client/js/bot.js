@@ -35,6 +35,7 @@ const SHOP_SCORE = {
   bulletSize: 46,
   crit: 62,
   critDmg: 58,
+  retarget: 76,
   execute: 52,
   bossDmg: 57,
   lowHpDmg: 50,
@@ -401,7 +402,7 @@ export function createBotBrain() {
       score = p.arsenal.length < 2 ? 78 : 50;
       if (u.unlockWeapon === 'pistol' && !hasRanged) score += 12;
     }
-    if (hasRanged && ['shootDmg', 'shootCd', 'multishot', 'pierce', 'bulletSize', 'shootSpd'].includes(u.id)) score += 8;
+    if (hasRanged && ['shootDmg', 'shootCd', 'multishot', 'pierce', 'bulletSize', 'shootSpd', 'retarget'].includes(u.id)) score += 8;
     if (hasMelee && ['melee', 'atkSpd', 'atkRange', 'lifesteal'].includes(u.id)) score += 6;
     if (lowHp && ['hp', 'shield', 'armor', 'regenRate', 'regenFast', 'killHeal'].includes(u.id)) score += 22;
     return score - offer.cost * 0.35;

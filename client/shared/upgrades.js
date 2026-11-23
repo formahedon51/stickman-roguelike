@@ -78,6 +78,7 @@ export const UPGRADE_POOL = [
   { id: 'crit', name: 'Критический удар', desc: '+7% шанс крита', base: 13, step: 10, max: 6, apply(p, m) { p.crit = Math.min(0.65, p.crit + 0.07 * m); } },
   { id: 'critDmg', name: 'Сила крита', desc: 'Криты бьют сильнее', base: 14, step: 10, max: 5, apply(p, m) { p.critDmg += 0.3 * m; } },
   { id: 'execute', name: 'Казнь', desc: 'Шанс добить слабого врага', base: 18, step: 0, max: 3, apply(p, m) { p.execute = Math.min(0.3, p.execute + 0.06 * m); } },
+  { id: 'retarget', name: 'Умные снаряды', desc: 'Пули и магия меняют цель уже после выстрела', base: 18, step: 14, max: 3, apply(p, m) { p.retarget = Math.min(4, p.retarget + Math.max(1, Math.round(m))); } },
   { id: 'bossDmg', name: 'Охотник на боссов', desc: '+урон по боссам', base: 15, step: 12, max: 4, apply(p, m) { p.bossDmg += 0.12 * m; } },
   { id: 'lowHpDmg', name: 'Ярость', desc: '+урон при низком HP', base: 12, step: 9, max: 4, apply(p, m) { p.lowHpDmg += 0.15 * m; } },
 

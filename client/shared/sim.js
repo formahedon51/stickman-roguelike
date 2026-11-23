@@ -14,6 +14,86 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const aabb = (a, b) =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
+
+// Пересечение отрезка (x1,y1)->(x2,y2) с прямоугольником.
+// Возвращает t входа [0..1] или null. Нужно для пуль на высокой скорости.
+function segmentBoxT(x1, y1, x2, y2, box, pad) {
+  const p = pad || 0;
+  const minX = box.x - p;
+  const maxX = box.x + box.w + p;
+  const minY = box.y - p;
+  const maxY = box.y + box.h + p;
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  if (Math.abs(dx) < 1e-9) {
+    if (x1 < minX || x1 > maxX) return null;
+  } else {
+    let a = (minX - x1) / dx;
+    let b = (maxX - x1) / dx;
+    if (a > b) { const tmp = a; a = b; b = tmp; }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+
+  if (Math.abs(dy) < 1e-9) {
+    if (y1 < minY || y1 > maxY) return null;
+  } else {
+    let a = (minY - y1) / dy;
+    let b = (maxY - y1) / dy;
+    if (a > b) { const tmp = a; a = b; b = tmp; }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+function enemyHurtbox(e) {
+  const padX = e.type === 'boss' ? 6 : e.type === 'brute' ? 4 : 3;
+  const padY = e.type === 'boss' ? 7 : e.type === 'brute' ? 4 : 3;
+  return { x: e.x - padX, y: e.y - padY, w: e.w + padX * 2, h: e.h + padY * 2 };
+}
+
+function lineBlocked(x1, y1, x2, y2, pad) {
+  for (const s of SOLIDS) {
+    if (segmentBoxT(x1, y1, x2, y2, s, pad || 0) !== null) return true;
+  }
+  return false;
+}
+
+// Упреждение по скорости цели: пуля летит в точку, где цель будет через t.
+function predictTargetPoint(originX, originY, target, speed) {
+  const tx0 = target.x + target.w / 2;
+  const ty0 = target.y + target.h / 2;
+  let tx = tx0;
+  let ty = ty0;
+  for (let i = 0; i < 3; i++) {
+    const d = Math.hypot(tx - originX, ty - originY);
+    const t = Math.min(1.4, d / Math.max(1, speed));
+    tx = tx0 + (target.vx || 0) * t;
+    ty = ty0 + (target.vy || 0) * t * 0.9;
+  }
+  return { x: tx, y: ty };
+}
+
+function steerProjectile(b, target, turnRate, dt) {
+  const want = Math.atan2((target.y + target.h / 2) - b.y, (target.x + target.w / 2) - b.x);
+  const cur = Math.atan2(b.vy, b.vx);
+  let diff = want - cur;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const turn = Math.min(Math.abs(diff), turnRate * dt);
+  if (turn <= 0) return;
+  const ang = cur + Math.sign(diff) * turn;
+  const sp = Math.hypot(b.vx, b.vy);
+  b.vx = Math.cos(ang) * sp;
+  b.vy = Math.sin(ang) * sp;
+}
+
 const emptyInput = () => ({
   left: false, right: false, jump: false, dash: false, attack: false, swap: false,
 });
@@ -50,6 +130,7 @@ export function makePlayer(def, index = 0, solo = false) {
     regenT: 0, regenDelay: 3.5, regenRate: 6,
     moveSpeed: 290, jumpPower: 830, armor: 0, xpMult: 1,
     crit: 0, critDmg: 2, magnetRange: 170, doubleJump: 0, jumpsLeft: 0,
+    retarget: 0,
     shield: 0, shieldMax: 0, shieldCd: 0, shieldCdMax: 10,
     bossDmg: 0, lowHpDmg: 0, coinMult: 1,
     killHeal: 0, thorns: 0, execute: 0,
@@ -454,7 +535,7 @@ function doPlayerHit(world, p, w) {
   let hit = false;
   for (const e of Object.values(world.enemies)) {
     if (!e.alive) continue;
-    if (aabb(hb, e)) {
+    if (aabb(hb, enemyHurtbox(e))) {
       hit = true;
       damageEnemy(world, e, p.damage * (w.damage || 1), p.facing, p, w.critBonus || 0);
       if (p.lifesteal > 0 && !p.dead) p.hp = Math.min(p.maxHp, p.hp + p.lifesteal);
@@ -469,33 +550,51 @@ function doPlayerHit(world, p, w) {
 
 function tryShoot(world, p, w) {
   if (p.dead || p.downed || p.shootCd > 0) return;
+  const originX = p.x + p.w / 2;
+  const originY = p.y + p.h * 0.42;
+  const speed = p.shootSpeed * (w.speed || 1);
+  const maxRange = Math.max(140, speed * (w.life || 2) * 1.15);
+
   let target = null;
-  let bestD = Infinity;
-  const px = p.x + p.w / 2;
+  let bestScore = Infinity;
   for (const e of Object.values(world.enemies)) {
     if (!e.alive) continue;
-    const dx = (e.x + e.w / 2) - px;
-    const dy = (e.y + e.h / 2) - (p.y + p.h / 2);
-    let d = dx * dx + dy * dy;
-    // Небольшой приоритет цели перед собой, но стрелять можно и назад.
-    if (p.facing > 0 && dx < 0) d *= 1.35;
-    if (p.facing < 0 && dx > 0) d *= 1.35;
-    if (d < bestD) { bestD = d; target = e; }
+    const ex = e.x + e.w / 2;
+    const ey = e.y + e.h / 2;
+    const rawDist = Math.hypot(ex - originX, ey - originY);
+    if (rawDist > maxRange) continue;
+    // Не наводимся на цель сквозь стены и платформы.
+    if (lineBlocked(originX, originY, ex, ey, 2)) continue;
+
+    const dx = ex - originX;
+    let score = rawDist;
+    if (p.facing > 0 && dx < 0) score *= 1.35;
+    if (p.facing < 0 && dx > 0) score *= 1.35;
+    if (score < bestScore) { bestScore = score; target = e; }
   }
-  const handY = p.y + p.h * 0.42;
+
   if (target) {
     p.facing = Math.sign((target.x + target.w / 2) - (p.x + p.w / 2)) || p.facing;
   }
   const handX = p.x + p.w / 2 + p.facing * 12;
-  const baseAng = target
-    ? Math.atan2((target.y + target.h / 2) - handY, (target.x + target.w / 2) - (p.x + p.w / 2))
-    : (p.facing > 0 ? 0 : Math.PI);
+  const handY = p.y + p.h * 0.42;
+
+  let aimX;
+  let aimY;
+  if (target) {
+    const aim = predictTargetPoint(handX, handY, target, speed);
+    aimX = aim.x;
+    aimY = aim.y;
+  } else {
+    aimX = handX + p.facing * 120;
+    aimY = handY;
+  }
+  const baseAng = Math.atan2(aimY - handY, aimX - handX);
 
   const baseShots = Math.max(1, w.shots || 1);
   const total = baseShots + (p.multishot || 0);
   const step = w.spread ? w.spread / Math.max(1, total - 1) : 0.16;
   const damage = p.shootDamage * (w.damage || 1);
-  const speed = p.shootSpeed * (w.speed || 1);
 
   for (let i = 0; i < total; i++) {
     const ang = baseAng + (i - (total - 1) / 2) * step;
@@ -510,6 +609,7 @@ function tryShoot(world, p, w) {
       pierce: (p.pierce || 0) + (w.pierce || 0),
       critBonus: w.critBonus || 0,
       homing: w.homing || 0,
+      retarget: p.retarget || 0,
       color: w.color || '#d8c8ff',
       kind: w.id,
       owner: p.id,
@@ -945,26 +1045,32 @@ function aiBoss(world, e, dt, p) {
 
 function updateProjectiles(world, dt) {
   for (const [id, b] of Object.entries(world.projectiles)) {
-    if (b.friendly && b.homing > 0) {
+    const px = b.x;
+    const py = b.y;
+
+    // Самонаведение посоха + улучшение, меняющее цель уже после выстрела.
+    if (b.friendly && ((b.homing || 0) > 0 || (b.retarget || 0) > 0)) {
+      const range = b.retarget > 0
+        ? Math.max(b.homing > 0 ? 900 : 0, 320 + b.retarget * 180)
+        : Infinity;
+      const range2 = range * range;
       let target = null;
       let bestD = Infinity;
       for (const e of Object.values(world.enemies)) {
         if (!e.alive) continue;
         if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
-        const d = dist2(b.x, b.y, e.x + e.w / 2, e.y + e.h / 2);
-        if (d < bestD) { bestD = d; target = e; }
+        const ecx = e.x + e.w / 2;
+        const ecy = e.y + e.h / 2;
+        if (lineBlocked(b.x, b.y, ecx, ecy, 1)) continue;
+        const d = dist2(b.x, b.y, ecx, ecy);
+        if (d <= range2 && d < bestD) { bestD = d; target = e; }
       }
       if (target) {
-        const want = Math.atan2((target.y + target.h / 2) - b.y, (target.x + target.w / 2) - b.x);
-        const cur = Math.atan2(b.vy, b.vx);
-        let diff = want - cur;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        const turn = Math.min(Math.abs(diff), b.homing * dt);
-        const ang = cur + Math.sign(diff) * turn;
-        const sp = Math.hypot(b.vx, b.vy);
-        b.vx = Math.cos(ang) * sp;
-        b.vy = Math.sin(ang) * sp;
+        const turnRate = Math.max(
+          b.homing || 0,
+          b.retarget > 0 ? 3.8 + b.retarget * 1.9 : 0,
+        );
+        steerProjectile(b, target, turnRate, dt);
       }
     }
 
@@ -975,41 +1081,48 @@ function updateProjectiles(world, dt) {
     let dead = b.life <= 0;
     if (!dead && (b.x < 0 || b.x > ARENA.w || b.y < 0 || b.y > ARENA.h)) dead = true;
 
-    if (!dead) {
-      for (const s of SOLIDS) {
-        if (b.x > s.x && b.x < s.x + s.w && b.y > s.y && b.y < s.y + s.h) {
-          dead = true;
-          break;
-        }
-      }
+    // Непрерывная проверка стен: быстрая пуля не перелетает платформу.
+    let wallT = Infinity;
+    for (const s of SOLIDS) {
+      const t = segmentBoxT(px, py, b.x, b.y, s, b.r);
+      if (t !== null && t < wallT) wallT = t;
     }
 
     if (!dead && b.friendly) {
-      const br = { x: b.x - b.r, y: b.y - b.r, w: b.r * 2, h: b.r * 2 };
+      // Собираем все попадания на отрезке за тик и обрабатываем по порядку.
+      const hits = [];
       for (const e of Object.values(world.enemies)) {
         if (!e.alive) continue;
         if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
-        if (aabb(br, e)) {
-          damageEnemy(world, e, b.damage, Math.sign(b.vx) || 1, b.source || null, b.critBonus || 0);
-          if (b._hitEnemies) b._hitEnemies.add(e.id);
-          if (b.pierce > 0) b.pierce--;
-          else dead = true;
-          break;
-        }
+        const t = segmentBoxT(px, py, b.x, b.y, enemyHurtbox(e), b.r);
+        if (t !== null && t <= wallT + 1e-6) hits.push({ e, t });
+      }
+      hits.sort((a, c) => a.t - c.t);
+      for (const hit of hits) {
+        if (dead) break;
+        const e = hit.e;
+        damageEnemy(world, e, b.damage, Math.sign(b.vx) || 1, b.source || null, b.critBonus || 0);
+        if (b._hitEnemies) b._hitEnemies.add(e.id);
+        if (b.pierce > 0) b.pierce--;
+        else dead = true;
       }
     }
 
     if (!dead && !b.friendly) {
-      const br = { x: b.x - b.r, y: b.y - b.r, w: b.r * 2, h: b.r * 2 };
+      let hitT = Infinity;
+      let hitP = null;
       for (const p of Object.values(world.players)) {
         if (p.dead || p.downed) continue;
-        if (aabb(br, p)) {
-          damagePlayer(world, p, 8, Math.sign(b.vx) || 1, b.source || null);
-          dead = true;
-          break;
-        }
+        const t = segmentBoxT(px, py, b.x, b.y, p, b.r);
+        if (t !== null && t < hitT) { hitT = t; hitP = p; }
+      }
+      if (hitP && hitT <= wallT + 1e-6) {
+        damagePlayer(world, hitP, 8, Math.sign(b.vx) || 1, b.source || null);
+        dead = true;
       }
     }
+
+    if (!dead && wallT !== Infinity) dead = true;
 
     if (dead) {
       burst(world, b.x, b.y, 5, b.friendly ? '#b79cff' : '#ff8a6a', 0.55);

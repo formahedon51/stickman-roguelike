@@ -325,7 +325,7 @@ export function createRenderer(canvas) {
     for (const id of Object.keys(state.projectiles || {})) {
       const b = state.projectiles[id];
       const v = vis.projectiles.get(id) || { rx: b.x, ry: b.y };
-      drawProjectile(b, v);
+      drawProjectile(b, v, now);
     }
 
     const players = Object.values(state.players || {});
@@ -524,7 +524,7 @@ export function createRenderer(canvas) {
     }
   }
 
-  function drawProjectile(b, v) {
+  function drawProjectile(b, v, now) {
     const x = v.rx;
     const y = v.ry;
     const r = b.r || 5;
@@ -560,6 +560,17 @@ export function createRenderer(canvas) {
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(x, y, r * 1.7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (b.retarget > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.2 * Math.sin(now * 9 + x * 0.02);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.arc(x, y, r * 2.3, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
