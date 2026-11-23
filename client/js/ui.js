@@ -8,22 +8,34 @@ function fmtTime(seconds) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, onReady, onPause }) {
+export function createUI({
+  onSolo, onDemo, onCreate, onJoin, onStart, onLobbyLeave,
+  onRestart, onMenu, onBuy, onReady, onPause,
+}) {
   const els = {
     menu: $('menu'),
     hud: $('hud'),
     gameover: $('gameover'),
     pause: $('pause'),
+    lobby: $('lobby'),
     menuStatus: $('menuStatus'),
     name: $('nameInput'),
-    server: $('serverInput'),
+    code: $('codeInput'),
     btnSolo: $('btnSolo'),
     btnDemo: $('btnDemo'),
-    btnConnect: $('btnConnect'),
+    btnCreate: $('btnCreate'),
+    btnJoin: $('btnJoin'),
     btnHelp: $('btnHelp'),
     btnPause: $('pauseBtn'),
     btnResume: $('btnResume'),
     btnPauseMenu: $('btnPauseMenu'),
+    roomCode: $('roomCode'),
+    lobbyPlayers: $('lobbyPlayers'),
+    lobbyStatus: $('lobbyStatus'),
+    btnStart: $('btnStart'),
+    btnLobbyLeave: $('btnLobbyLeave'),
+    btnCopyCode: $('btnCopyCode'),
+    btnCopyLink: $('btnCopyLink'),
     players: $('playersHud'),
     lvl: $('lvlNum'),
     xpFill: $('xpFill'),
@@ -51,26 +63,30 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
   };
 
   const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-
   const rows = new Map();
   let shopKey = '';
+  let lobbyData = null;
 
   let prefs = {};
   try { prefs = JSON.parse(localStorage.getItem('rg_prefs') || '{}'); } catch (e) { /* noop */ }
   if (prefs.name) els.name.value = prefs.name;
-  if (prefs.server) els.server.value = prefs.server;
+
+  try {
+    const room = new URLSearchParams(location.search).get('room');
+    if (room) {
+      els.code.value = room.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+      setMenuStatus('Код комнаты подставлен. Нажми «Войти по коду».');
+    }
+  } catch (e) { /* noop */ }
 
   function savePrefs() {
     try {
-      localStorage.setItem('rg_prefs', JSON.stringify({
-        name: els.name.value.trim(),
-        server: els.server.value.trim(),
-      }));
+      localStorage.setItem('rg_prefs', JSON.stringify({ name: els.name.value.trim() }));
     } catch (e) { /* noop */ }
   }
 
   const getName = () => els.name.value.trim() || 'Игрок';
-  const getServerUrl = () => els.server.value.trim();
+  const getCode = () => (els.code.value || '').trim().toUpperCase();
 
   function setMenuStatus(text, kind) {
     els.menuStatus.textContent = text || '';
@@ -79,6 +95,8 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
 
   const showMenu = () => els.menu.classList.add('show');
   const hideMenu = () => els.menu.classList.remove('show');
+  const hideLobby = () => els.lobby.classList.remove('show');
+
   function showHud() {
     els.hud.classList.remove('hidden');
     if (isTouch) els.touch.classList.remove('hidden');
@@ -88,7 +106,10 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
     els.hud.classList.add('hidden');
     els.touch.classList.add('hidden');
   }
-  const hideShop = () => els.shop.classList.remove('show');
+
+  function setPaused(value) {
+    els.pause.classList.toggle('show', !!value);
+  }
 
   function showTutorial() {
     els.tutorial.classList.add('show');
@@ -106,6 +127,67 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
       }, 400);
     }
   } catch (e) { /* noop */ }
+
+  /* ---------------- lobby ---------------- */
+
+  function shareLink() {
+    const code = els.roomCode.textContent;
+    let url = location.origin + location.pathname + '?room=' + encodeURIComponent(code);
+    try {
+      const server = new URLSearchParams(location.search).get('server');
+      if (server) url += '&server=' + encodeURIComponent(server);
+    } catch (e) { /* noop */ }
+    return url;
+  }
+
+  function renderLobbyPlayers(players) {
+    els.lobbyPlayers.innerHTML = '';
+    for (const p of players) {
+      const row = document.createElement('div');
+      row.className = 'lobby-player';
+
+      const dot = document.createElement('span');
+      dot.className = 'pdot';
+      dot.style.background = p.color || '#4aa3ff';
+
+      const name = document.createElement('b');
+      name.textContent = (p.host ? 'ХОСТ · ' : '') + (p.name || 'Игрок');
+
+      row.appendChild(dot);
+      row.appendChild(name);
+      els.lobbyPlayers.appendChild(row);
+    }
+  }
+
+  function showLobby(data) {
+    lobbyData = data;
+    els.lobby.classList.add('show');
+    els.menu.classList.remove('show');
+    els.hud.classList.add('hidden');
+    els.roomCode.textContent = data.code || '------';
+    els.btnStart.style.display = data.isHost && !data.started ? '' : 'none';
+    if (data.started) els.lobbyStatus.textContent = 'Игра началась…';
+    else if (data.isHost) els.lobbyStatus.textContent = 'Нажми «Начать», когда все подключатся.';
+    else els.lobbyStatus.textContent = 'Ожидание хоста…';
+    renderLobbyPlayers(data.players || []);
+  }
+
+  function setLobbyStatus(text, kind) {
+    els.lobbyStatus.textContent = text || '';
+    els.lobbyStatus.className = kind || '';
+  }
+
+  async function copyText(text) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ---------------- game over ---------------- */
 
   function showGameOver(stats) {
     const s = stats || {};
@@ -128,12 +210,13 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
       .map(([k, v], i) => `<div class="go-row${i === items.length - 1 ? ' best' : ''}"><span>${k}</span><b>${v}</b></div>`)
       .join('');
     els.gameover.classList.add('show');
-    hideShop();
+    els.shop.classList.remove('show');
   }
 
-  function hideGameOver() {
-    els.gameover.classList.remove('show');
-  }
+  const hideGameOver = () => els.gameover.classList.remove('show');
+  const hideShop = () => els.shop.classList.remove('show');
+
+  /* ---------------- players / HUD ---------------- */
 
   function makeRow() {
     const root = document.createElement('div');
@@ -296,13 +379,18 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
     }
   }
 
+  /* ---------------- handlers ---------------- */
+
   els.btnSolo.addEventListener('click', () => { savePrefs(); onSolo(); });
   els.btnDemo.addEventListener('click', () => { savePrefs(); onDemo(); });
-  els.btnConnect.addEventListener('click', () => { savePrefs(); onConnect(); });
+  els.btnCreate.addEventListener('click', () => { savePrefs(); onCreate(); });
+  els.btnJoin.addEventListener('click', () => { savePrefs(); onJoin(); });
+  els.btnHelp.addEventListener('click', showTutorial);
   els.btnPause.addEventListener('click', onPause);
   els.btnResume.addEventListener('click', onPause);
   els.btnPauseMenu.addEventListener('click', onMenu);
-  els.btnHelp.addEventListener('click', showTutorial);
+  els.btnStart.addEventListener('click', onStart);
+  els.btnLobbyLeave.addEventListener('click', onLobbyLeave);
   els.btnTutorialOk.addEventListener('click', closeTutorial);
   els.tutorial.addEventListener('click', (e) => {
     if (e.target === els.tutorial) closeTutorial();
@@ -311,6 +399,16 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
   els.btnGoMenu.addEventListener('click', onMenu);
   els.btnLeave.addEventListener('click', onMenu);
   els.btnShopReady.addEventListener('click', onReady);
+
+  els.btnCopyCode.addEventListener('click', async () => {
+    const ok = await copyText(els.roomCode.textContent);
+    setLobbyStatus(ok ? 'Код скопирован!' : 'Выдели код вручную', ok ? '' : 'warn');
+  });
+
+  els.btnCopyLink.addEventListener('click', async () => {
+    const ok = await copyText(shareLink());
+    setLobbyStatus(ok ? 'Ссылка скопирована!' : 'Выдели ссылку вручную', ok ? '' : 'warn');
+  });
 
   window.addEventListener('keydown', (e) => {
     if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
@@ -326,18 +424,19 @@ export function createUI({ onSolo, onDemo, onConnect, onRestart, onMenu, onBuy, 
 
   return {
     getName,
-    getServerUrl,
+    getCode,
     setMenuStatus,
     showMenu,
     hideMenu,
     showHud,
     hideHud,
+    showLobby,
+    hideLobby,
+    setLobbyStatus,
     showGameOver,
     hideGameOver,
     hideShop,
-    setPaused(value) {
-      els.pause.classList.toggle('show', !!value);
-    },
+    setPaused,
     updateHud,
     savePrefs,
   };

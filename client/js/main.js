@@ -2,7 +2,7 @@ import { createRenderer } from './render.js';
 import { createInput } from './input.js';
 import { createUI } from './ui.js';
 import { createDemo } from './demo.js';
-import { connectColyseus } from './net.js';
+import { createP2PHost, createP2PGuest } from './p2p.js';
 import { createAudio } from './audio.js';
 
 const canvas = document.getElementById('game');
@@ -20,7 +20,10 @@ let paused = false;
 const ui = createUI({
   onSolo: startSolo,
   onDemo: startDemo,
-  onConnect: startConnect,
+  onCreate: createRoom,
+  onJoin: joinRoom,
+  onStart: startRoom,
+  onLobbyLeave: () => leaveSession(),
   onPause: togglePause,
   onRestart: () => {
     if (!session) return;
@@ -43,6 +46,7 @@ function begin(adapter) {
   paused = false;
 
   ui.hideMenu();
+  ui.hideLobby();
   ui.showHud();
   ui.hideGameOver();
   ui.hideShop();
@@ -56,7 +60,7 @@ function begin(adapter) {
   let prevInput = input.snapshot();
   inputTimer = setInterval(() => {
     const cur = input.snapshot();
-    if (active && session) session.sendInput(cur);
+    if (active && session && session.sessionId) session.sendInput(cur);
     if (active) {
       if (cur.jump && !prevInput.jump) audio.sfx.jump();
       if (cur.dash && !prevInput.dash) audio.sfx.dash();
@@ -69,9 +73,8 @@ function begin(adapter) {
 
 function startLocal(solo) {
   if (session) leaveSession();
-  const name = ui.getName();
   const adapter = createDemo({
-    name,
+    name: ui.getName(),
     solo,
     onState: (s) => { state = s; },
     onGameOver: (stats) => ui.showGameOver(stats),
@@ -95,35 +98,66 @@ function togglePause() {
   ui.setPaused(paused);
 }
 
-async function startConnect() {
-  const url = ui.getServerUrl();
-  const name = ui.getName();
-  if (!url) {
-    ui.setMenuStatus('Укажите адрес сервера, например wss://45-12-34-56.sslip.io', 'warn');
+function createRoom() {
+  if (session) leaveSession();
+  const adapter = createP2PHost({
+    name: ui.getName(),
+    onLobby: (data) => {
+      if (data.started) ui.hideLobby();
+      else ui.showLobby(data);
+    },
+    onState: (s) => { state = s; },
+    onGameOver: (stats) => ui.showGameOver(stats),
+    onStarted: () => begin(adapter),
+    onError: (msg) => {
+      ui.hideLobby();
+      ui.showMenu();
+      ui.setMenuStatus(msg, 'err');
+      if (session === adapter) session = null;
+    },
+    onEnd: () => { /* хост сам завершает */ },
+  });
+  session = adapter;
+}
+
+function joinRoom() {
+  const code = ui.getCode();
+  if (code.length !== 6) {
+    ui.setMenuStatus('Код комнаты — 6 символов', 'err');
     return;
   }
+  if (session) leaveSession();
+  const adapter = createP2PGuest({
+    code,
+    name: ui.getName(),
+    onLobby: (data) => {
+      if (data.started) ui.hideLobby();
+      else ui.showLobby(data);
+    },
+    onState: (s) => { state = s; },
+    onStarted: () => begin(adapter),
+    onError: (msg) => {
+      ui.hideLobby();
+      ui.showMenu();
+      ui.setMenuStatus(msg, 'err');
+      if (session === adapter) session = null;
+    },
+    onEnd: (msg) => {
+      if (active) {
+        leaveSession(msg || 'Соединение с хостом закрыто.');
+      } else {
+        ui.hideLobby();
+        ui.showMenu();
+        ui.setMenuStatus(msg || 'Соединение закрыто', 'warn');
+        if (session === adapter) session = null;
+      }
+    },
+  });
+  session = adapter;
+}
 
-  ui.setMenuStatus('Подключение к серверу…');
-
-  try {
-    if (session) leaveSession();
-    const adapter = await connectColyseus({
-      url,
-      name,
-      onState: (s) => { state = s; },
-      onGameOver: (stats) => ui.showGameOver(stats),
-      onLeave: () => {
-        if (active) leaveSession('Соединение с сервером закрыто.');
-      },
-      onError: (msg) => {
-        if (active) leaveSession('Ошибка сервера: ' + msg);
-        else ui.setMenuStatus('Ошибка сервера: ' + msg, 'err');
-      },
-    });
-    begin(adapter);
-  } catch (e) {
-    ui.setMenuStatus('Не удалось подключиться: ' + (e && e.message ? e.message : e), 'err');
-  }
+function startRoom() {
+  if (session && session.isHost && session.start) session.start();
 }
 
 function leaveSession(message) {
@@ -145,6 +179,7 @@ function leaveSession(message) {
   ui.hideHud();
   ui.hideGameOver();
   ui.hideShop();
+  ui.hideLobby();
   ui.showMenu();
 
   if (message) ui.setMenuStatus(message, 'warn');
@@ -152,9 +187,9 @@ function leaveSession(message) {
 
 let last = 0;
 const prevState = { hp: null, coins: null, level: null, wave: null, downed: null };
-function trackSounds(state, selfId) {
-  if (!state) return;
-  const me = state.players && state.players[selfId];
+function trackSounds(stateNow, id) {
+  if (!stateNow) return;
+  const me = stateNow.players && stateNow.players[id];
   if (me) {
     if (prevState.hp != null && me.hp < prevState.hp - 1 && !me.dead) audio.sfx.hurt();
     if (prevState.downed === false && me.downed) audio.sfx.downed();
@@ -162,17 +197,17 @@ function trackSounds(state, selfId) {
     prevState.hp = me.hp;
     prevState.downed = me.downed;
   }
-  if (prevState.coins != null && state.coins > prevState.coins) audio.sfx.coin();
-  prevState.coins = state.coins;
+  if (prevState.coins != null && stateNow.coins > prevState.coins) audio.sfx.coin();
+  prevState.coins = stateNow.coins;
 
-  if (prevState.wave != null && state.wave > prevState.wave) {
-    if (state.wave % 5 === 0) audio.sfx.boss();
+  if (prevState.wave != null && stateNow.wave > prevState.wave) {
+    if (stateNow.wave % 5 === 0) audio.sfx.boss();
     else audio.sfx.wave();
   }
-  prevState.wave = state.wave;
+  prevState.wave = stateNow.wave;
 
-  if (prevState.level != null && state.level > prevState.level) audio.sfx.level();
-  prevState.level = state.level;
+  if (prevState.level != null && stateNow.level > prevState.level) audio.sfx.level();
+  prevState.level = stateNow.level;
 }
 
 function loop(ts) {
@@ -213,7 +248,7 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// Отладочный доступ для ручной проверки (не влияет на игру).
+// Отладочный доступ (для тестов, не влияет на игру).
 window.__RG_DEBUG__ = {
   getState: () => state,
   getSession: () => session,
