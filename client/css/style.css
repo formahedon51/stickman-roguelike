@@ -112,14 +112,18 @@ h1 span { color: #4affa0; text-shadow: 0 0 26px rgba(74, 255, 160, .5); }
   font-weight: 700;
   letter-spacing: 1px;
 }
+.class-card .cc-weapons {
+  font-size: 10px;
+  letter-spacing: 2px;
+  opacity: .75;
+  color: var(--cls-color, #8fd0ff);
+}
 .class-card .cc-desc {
   font-size: 9px;
   line-height: 1.35;
   opacity: .62;
   min-height: 24px;
 }
-
-.lobby-class { margin-left: auto; font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
 
 .fields {
   display: flex;
@@ -234,72 +238,94 @@ button.alt:hover {
   text-shadow: 0 0 10px rgba(0, 0, 0, .9);
 }
 
-#playersHud {
+.hud-card {
+  background: rgba(9, 14, 21, .66);
+  border: 1px solid rgba(120, 150, 180, .2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .28);
+}
+
+.player-card {
+  width: min(330px, 34vw);
+  min-width: 230px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-width: 360px;
-  max-height: 46vh;
-  overflow: hidden;
+  gap: 5px;
 }
-
-.prow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: rgba(10, 15, 22, .62);
-  border: 1px solid rgba(120, 150, 180, .18);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  font-size: 11px;
-  min-width: 220px;
-}
-.prow.dead { opacity: .45; }
-
-.pdot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
-.pinfo { flex: 1; min-width: 0; }
-.pname {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  letter-spacing: .5px;
-  color: #dce8f5;
+.pc-top { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.pc-class-icon { font-size: 18px; line-height: 1; text-shadow: 0 0 12px currentColor; }
+.pc-name {
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #e8eef7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ptag { font-size: 8px; letter-spacing: 1px; color: #4affa0; opacity: .9; }
-.prow.dead .ptag { color: #ff7a7a; }
-
-.pbar {
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, .08);
-  overflow: hidden;
-  margin-top: 3px;
+.pc-hp { margin-left: auto; font-size: 10px; opacity: .68; white-space: nowrap; }
+.bot-badge {
+  font-size: 8px;
+  letter-spacing: 1px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #4affa0;
+  background: rgba(74, 255, 160, .12);
+  border: 1px solid rgba(74, 255, 160, .35);
 }
-.pbar i {
+
+.hpbar {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(160, 180, 200, .14);
+  overflow: hidden;
+}
+#hpFill {
   display: block;
   height: 100%;
   width: 100%;
+  background: #4aa3ff;
+  box-shadow: 0 0 10px rgba(74, 163, 255, .35);
   transition: width .08s linear;
 }
-
-.php { font-size: 9px; opacity: .65; min-width: 48px; text-align: right; }
-
-#centerHud { text-align: center; padding-top: 2px; }
-#waveLbl { font-size: 13px; letter-spacing: 3px; opacity: .85; }
-#weaponLbl {
-  font-size: 11px;
-  letter-spacing: 2px;
-  min-height: 14px;
-  color: #ffd54f;
-  opacity: .95;
-  text-shadow: 0 0 10px rgba(0, 0, 0, .9);
+.shieldbar {
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(127, 231, 255, .08);
+  overflow: hidden;
 }
+#shieldFill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #7fe7ff;
+  box-shadow: 0 0 8px rgba(127, 231, 255, .6);
+  transition: width .12s linear;
+}
+
+.pc-xp { display: flex; align-items: center; gap: 7px; font-size: 9px; letter-spacing: 1px; opacity: .8; }
+.pc-xp .lvl { opacity: .65; white-space: nowrap; }
+.pc-xp b { color: #e8eef7; font-weight: 400; }
+.pc-xp #xpNum { margin-left: auto; opacity: .6; }
+
+.pc-weapon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(120, 150, 180, .14);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+}
+.pw-icon { font-size: 15px; line-height: 1; text-shadow: 0 0 10px currentColor; }
+#weaponLbl { font-weight: 700; }
+.pw-hint { margin-left: auto; font-size: 9px; letter-spacing: 1px; opacity: .5; color: #cfe6ff; }
+
+#centerHud { text-align: center; padding-top: 2px; min-width: 150px; }
+#waveLbl { font-size: 13px; letter-spacing: 3px; opacity: .9; }
 #enemyLbl {
   font-size: 10px;
   letter-spacing: 2px;
@@ -307,17 +333,27 @@ button.alt:hover {
   opacity: .85;
   min-height: 13px;
 }
+#comboLbl {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #ffd54f;
+  min-height: 14px;
+  text-shadow: 0 0 12px rgba(255, 213, 79, .5);
+}
 
-#rightHud {
+.right-card {
   text-align: right;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   align-items: flex-end;
+  min-width: 132px;
 }
-.hud-row { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
-#scoreLbl { font-size: 12px; letter-spacing: 1px; opacity: .9; color: #ffd54f; }
-
+.hud-stat { display: flex; align-items: center; gap: 6px; font-size: 12px; letter-spacing: 1px; color: #e8eef7; }
+.hs-icon { font-size: 10px; opacity: .6; }
+#coinLbl { color: #e8c15a; }
+#scoreLbl { color: #ffd54f; }
+.hud-row { display: flex; gap: 6px; align-items: center; margin-top: 2px; flex-wrap: wrap; justify-content: flex-end; }
 .hud-btn {
   pointer-events: auto;
   font-size: 10px;
@@ -329,6 +365,7 @@ button.alt:hover {
   color: #c9d1dc;
 }
 .hud-btn:hover { border-color: rgba(74, 163, 255, .6); color: #fff; }
+#speedBtn.fast { color: #ffd54f; border-color: rgba(255, 213, 79, .6); }
 
 /* ---------- game over ---------- */
 
@@ -360,28 +397,10 @@ button.alt:hover {
 .go-row span { opacity: .65; }
 .go-row b { color: #e8eef7; }
 
-/* ---------- HUD v2 (как в предыдущей версии) ---------- */
+/* ---------- XP / boss ---------- */
 
-.hud-left {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 360px;
-}
-
-#levelRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  letter-spacing: 1px;
-  opacity: .8;
-  padding: 2px 8px;
-}
-#levelRow .lvl { opacity: .65; }
-#levelRow b { color: #e8eef7; font-weight: 400; }
 .xpbar {
-  width: 130px;
+  flex: 1;
   height: 6px;
   border-radius: 3px;
   background: rgba(255, 255, 255, .08);
@@ -396,20 +415,6 @@ button.alt:hover {
   box-shadow: 0 0 10px rgba(183, 156, 255, .4);
   transition: width .12s linear;
 }
-#xpNum { font-size: 9px; opacity: .6; }
-
-#comboLbl {
-  font-size: 12px;
-  letter-spacing: 2px;
-  color: #ffd54f;
-  min-height: 14px;
-  text-shadow: 0 0 12px rgba(255, 213, 79, .5);
-}
-#coinLbl { font-size: 12px; color: #e8c15a; letter-spacing: 1px; }
-#scoreLbl { font-size: 12px; color: #e8eef7; letter-spacing: 1px; opacity: .9; }
-
-.prow.downed { opacity: .65; }
-.prow.downed .ptag { color: #ffd54f; }
 
 #bossBar {
   position: fixed;
@@ -445,40 +450,6 @@ button.alt:hover {
   box-shadow: 0 0 15px rgba(255, 50, 50, .6);
   transition: width .12s linear;
 }
-
-/* ---------- lobby / p2p ---------- */
-
-.code {
-  font-size: 30px;
-  font-weight: bold;
-  letter-spacing: 8px;
-  color: #ffd54f;
-  user-select: all;
-  font-family: ui-monospace, monospace;
-}
-.lobby-players {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  max-width: 420px;
-  min-width: 280px;
-}
-.lobby-player {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 7px;
-  background: rgba(20, 28, 38, .7);
-  border: 1px solid rgba(120, 150, 180, .25);
-  font-size: 12px;
-  letter-spacing: .5px;
-  text-align: left;
-}
-.lobby-player b { font-weight: 400; color: #e8eef7; }
-#lobbyStatus { font-size: 12px; opacity: .75; min-height: 18px; letter-spacing: .5px; }
-#lobbyStatus.warn { color: #ffd54f; opacity: 1; }
 
 /* ---------- shop ---------- */
 
@@ -516,6 +487,7 @@ button.alt:hover {
 .shop-card.purchased { opacity: .5; }
 .shop-card .srarity { font-size: 9px; letter-spacing: 3px; font-weight: bold; text-transform: uppercase; }
 .shop-card .sname { font-size: 14px; letter-spacing: 1px; color: #e8eef7; font-weight: bold; text-align: center; }
+.shop-card .sdesc { font-size: 10px; line-height: 1.4; opacity: .62; text-align: center; min-height: 28px; }
 .shop-card .slevel { font-size: 10px; letter-spacing: 2px; opacity: .55; }
 .shop-card .scost { font-size: 16px; color: #e8c15a; font-weight: bold; letter-spacing: 1px; }
 .shop-card .scost.affordable { color: #f0d27a; text-shadow: 0 0 10px rgba(240, 210, 122, .5); }
@@ -655,8 +627,15 @@ button.alt:hover {
   .class-card .cc-desc { min-height: 0; }
   .fields { flex-direction: column; }
   .fields label { min-width: 0; }
-  #playersHud { max-width: 48vw; }
-  .prow { min-width: 0; font-size: 10px; }
-  .php { display: none; }
+  #hud { padding: 8px; gap: 6px; }
+  .hud-card { padding: 6px 7px; }
+  .player-card { width: 48vw; min-width: 0; }
+  .pc-name { font-size: 10px; }
+  .pc-hp { display: none; }
+  #centerHud { min-width: 0; }
+  #waveLbl { font-size: 11px; letter-spacing: 2px; }
+  .right-card { min-width: 0; }
+  .hud-stat { font-size: 10px; }
+  .hud-btn { padding: 5px 7px; font-size: 9px; }
   .keys { display: none; }
 }

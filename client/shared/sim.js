@@ -1,5 +1,4 @@
-// Авторитетная симуляция забега (перенесено из STICKMAN CO-OP V2).
-// Чистый JS без DOM. Этот же модуль сможет использовать Colyseus-сервер.
+// Авторитетная симуляция забега. Чистый JS без DOM.
 
 import {
   ARENA, SOLIDS, PLAYER, ENEMY_TYPES, GRAVITY, MAX_ACTIVE_ENEMIES,
@@ -8,6 +7,7 @@ import {
 } from './constants.js';
 import { RARITY_MULT, rollOffers } from './upgrades.js';
 import { applyClass } from './classes.js';
+import { getWeapon } from './weapons.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -43,19 +43,23 @@ export function makePlayer(def, index = 0, solo = false) {
     dead: false, downed: false, downedTimer: 0, reviveProgress: 0,
     attackCd: 0, attackT: 0, attackCdMax: 0.36, attackRange: 54,
     damage: 34, lifesteal: 0,
-    shootCd: 0, shootT: 0, shootCdMax: 2.5, shootDamage: 24,
-    shootSpeed: 720, multishot: 0, pierce: 0,
+    shootCd: 0, shootT: 0, shootCdMax: 1.0, shootDamage: 24,
+    shootSpeed: 720, multishot: 0, pierce: 0, bulletSize: 0,
     dashCd: 0, dashT: 0, dashDir: 1, dashCdMax: 0.9,
-    dashSpeed: 900, dashDur: 0.17, dashDamage: 0,
+    dashSpeed: 900, dashDur: 0.17, dashDamage: 0, dashInvuln: 0,
     regenT: 0, regenDelay: 3.5, regenRate: 6,
     moveSpeed: 290, jumpPower: 830, armor: 0, xpMult: 1,
-    crit: 0, magnetRange: 170, doubleJump: 0, jumpsLeft: 0,
+    crit: 0, critDmg: 2, magnetRange: 170, doubleJump: 0, jumpsLeft: 0,
+    shield: 0, shieldMax: 0, shieldCd: 0, shieldCdMax: 10,
+    bossDmg: 0, lowHpDmg: 0, coinMult: 1,
+    killHeal: 0, thorns: 0, execute: 0,
     damageThisWave: 0, jumpAnim: 0, landAnim: 0,
     _prevOnGround: false, _prevJump: false, _prevDash: false, _prevSwap: false,
     intent: emptyInput(),
     shopLevels: {}, shopOffers: [], ready: false,
     kills: 0, score: 0,
-    weapon: 'sword', clazz: 'warrior', switchCd: 0,
+    weapon: 'sword', weaponIndex: 0, arsenal: ['sword'], clazz: 'warrior',
+    switchCd: 0, swapCdMax: 0.35,
   };
   applyClass(p, def.clazz || (index % 2 === 0 ? 'warrior' : 'gunner'));
   return p;
@@ -280,6 +284,14 @@ function updatePlayerPhysics(world, p, dt) {
     p.hp = Math.min(p.maxHp, p.hp + p.regenRate * dt);
   }
 
+  if (p.shieldMax > 0) {
+    p.shieldCd -= dt;
+    if (p.shieldCd <= 0) {
+      p.shield = p.shieldMax;
+      p.shieldCd = p.shieldCdMax;
+    }
+  }
+
   if (p.dashT > 0) {
     p.dashT -= dt;
     p.vx = p.dashDir * p.dashSpeed;
@@ -395,64 +407,67 @@ function tryDash(world, p) {
   p.dashDir = p.intent.left ? -1 : p.intent.right ? 1 : p.facing;
   p.facing = p.dashDir;
   p.vy = 0;
-  p.invuln = Math.max(p.invuln, p.dashDur + 0.06);
+  p.invuln = Math.max(p.invuln, p.dashDur + 0.06 + (p.dashInvuln || 0));
   for (const e of Object.values(world.enemies)) e._dashHit = false;
   burst(world, p.x + p.w / 2, p.y + p.h * 0.5, 9, p.color, 0.75);
 }
 
 function trySwitch(p) {
   if (p.dead || p.downed || p.switchCd > 0) return false;
-  p.weapon = p.weapon === 'gun' ? 'sword' : 'gun';
-  p.switchCd = 0.35;
+  const list = Array.isArray(p.arsenal) && p.arsenal.length ? p.arsenal : [p.weapon || 'sword'];
+  if (list.length < 2) return false;
+  p.weaponIndex = ((p.weaponIndex || 0) + 1) % list.length;
+  p.weapon = list[p.weaponIndex];
+  p.switchCd = p.swapCdMax || 0.35;
   p.attackT = 0;
   p.shootT = 0;
-  // Небольшая задержка перед атакой новым оружием.
-  if (p.weapon === 'gun') p.shootCd = Math.max(p.shootCd, 0.18);
-  else p.attackCd = Math.max(p.attackCd, 0.12);
+  const w = getWeapon(p.weapon);
+  if (w.kind === 'ranged') p.shootCd = Math.max(p.shootCd, 0.12);
+  else p.attackCd = Math.max(p.attackCd, 0.1);
   return true;
 }
 
 // Одно активное оружие: J атакует тем, что в руках.
 function tryAttack(world, p) {
   if (p.dead || p.downed) return;
-  if (p.weapon === 'gun') tryShoot(world, p);
-  else tryMelee(world, p);
+  const w = getWeapon(p.weapon);
+  if (w.kind === 'ranged') tryShoot(world, p, w);
+  else tryMelee(world, p, w);
 }
 
-function tryMelee(world, p) {
-  if (p.weapon !== 'sword') return;
+function tryMelee(world, p, w) {
   if (p.dead || p.downed || p.attackCd > 0 || p.attackT > 0) return;
-  p.attackCd = p.attackCdMax;
-  p.attackT = 0.24;
-  doPlayerHit(world, p);
+  p.attackCd = p.attackCdMax * (w.cooldown || 1);
+  p.attackT = 0.24 * (w.anim || 1);
+  doPlayerHit(world, p, w);
 }
 
-function doPlayerHit(world, p) {
-  const R = p.attackRange;
+function doPlayerHit(world, p, w) {
+  const R = p.attackRange * (w.range || 1);
+  const hh = (p.h - 8) * (w.height || 1);
   const hb = {
     x: p.facing > 0 ? p.x + p.w - 8 : p.x + 8 - R,
-    y: p.y + 4,
+    y: p.y + 4 + (p.h - 8 - hh) / 2,
     w: R,
-    h: p.h - 8,
+    h: hh,
   };
   let hit = false;
   for (const e of Object.values(world.enemies)) {
     if (!e.alive) continue;
     if (aabb(hb, e)) {
       hit = true;
-      damageEnemy(world, e, p.damage, p.facing, p);
+      damageEnemy(world, e, p.damage * (w.damage || 1), p.facing, p, w.critBonus || 0);
       if (p.lifesteal > 0 && !p.dead) p.hp = Math.min(p.maxHp, p.hp + p.lifesteal);
     }
   }
   if (hit) {
-    world.shake = Math.max(world.shake, 6);
+    world.shake = Math.max(world.shake, w.damage > 1.5 ? 10 : 6);
     world.hitStop = Math.max(world.hitStop, 0.04);
-    burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 8, '#9ccdff', 0.7);
+    burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 8, w.color || '#9ccdff', 0.7);
   }
 }
 
-function tryShoot(world, p) {
-  if (p.weapon !== 'gun') return;
+function tryShoot(world, p, w) {
   if (p.dead || p.downed || p.shootCd > 0) return;
   let target = null;
   let bestD = Infinity;
@@ -460,36 +475,51 @@ function tryShoot(world, p) {
   for (const e of Object.values(world.enemies)) {
     if (!e.alive) continue;
     const dx = (e.x + e.w / 2) - px;
-    if (p.facing > 0 && dx < -60) continue;
-    if (p.facing < 0 && dx > 60) continue;
     const dy = (e.y + e.h / 2) - (p.y + p.h / 2);
-    const d = dx * dx + dy * dy;
+    let d = dx * dx + dy * dy;
+    // Небольшой приоритет цели перед собой, но стрелять можно и назад.
+    if (p.facing > 0 && dx < 0) d *= 1.35;
+    if (p.facing < 0 && dx > 0) d *= 1.35;
     if (d < bestD) { bestD = d; target = e; }
   }
-  const handX = p.x + p.w / 2 + p.facing * 12;
   const handY = p.y + p.h * 0.42;
+  if (target) {
+    p.facing = Math.sign((target.x + target.w / 2) - (p.x + p.w / 2)) || p.facing;
+  }
+  const handX = p.x + p.w / 2 + p.facing * 12;
   const baseAng = target
-    ? Math.atan2((target.y + target.h / 2) - handY, (target.x + target.w / 2) - handX)
+    ? Math.atan2((target.y + target.h / 2) - handY, (target.x + target.w / 2) - (p.x + p.w / 2))
     : (p.facing > 0 ? 0 : Math.PI);
-  const shots = 1 + p.multishot;
-  for (let i = 0; i < shots; i++) {
-    const ang = baseAng + (i - (shots - 1) / 2) * 0.18;
+
+  const baseShots = Math.max(1, w.shots || 1);
+  const total = baseShots + (p.multishot || 0);
+  const step = w.spread ? w.spread / Math.max(1, total - 1) : 0.16;
+  const damage = p.shootDamage * (w.damage || 1);
+  const speed = p.shootSpeed * (w.speed || 1);
+
+  for (let i = 0; i < total; i++) {
+    const ang = baseAng + (i - (total - 1) / 2) * step;
     spawnProjectile(world, {
       x: handX, y: handY,
-      vx: Math.cos(ang) * p.shootSpeed,
-      vy: Math.sin(ang) * p.shootSpeed,
-      r: 5, life: 2,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      r: (w.r || 5) + (p.bulletSize || 0),
+      life: w.life || 2,
       friendly: true,
-      damage: p.shootDamage,
-      pierce: p.pierce,
+      damage,
+      pierce: (p.pierce || 0) + (w.pierce || 0),
+      critBonus: w.critBonus || 0,
+      homing: w.homing || 0,
+      color: w.color || '#d8c8ff',
+      kind: w.id,
       owner: p.id,
       source: p,
     });
   }
-  p.shootCd = p.shootCdMax;
+  p.shootCd = p.shootCdMax * (w.cooldown || 1);
   p.shootT = 0.18;
-  burst(world, handX, handY, 5, '#b79cff', 0.5);
-  world.shake = Math.max(world.shake, 2);
+  burst(world, handX, handY, 5, w.color || '#b79cff', 0.5);
+  world.shake = Math.max(world.shake, w.damage > 1.2 ? 4 : 2);
 }
 
 function spawnProjectile(world, data) {
@@ -505,11 +535,20 @@ function spawnProjectile(world, data) {
 /* Урон                                                                */
 /* ------------------------------------------------------------------ */
 
-function damageEnemy(world, e, dmg, dir, source) {
+function damageEnemy(world, e, dmg, dir, source, critBonus) {
   if (!e.alive) return;
+  if (source && source.bossDmg > 0 && e.type === 'boss') dmg *= 1 + source.bossDmg;
+  if (source && source.lowHpDmg > 0 && source.maxHp > 0 && source.hp / source.maxHp <= 0.35) {
+    dmg *= 1 + source.lowHpDmg;
+  }
   let crit = false;
-  if (source && source.crit > 0 && Math.random() < source.crit) {
-    dmg *= 2;
+  const critChance = (source ? source.crit : 0) + (critBonus || 0);
+  if (critChance > 0 && Math.random() < critChance) {
+    dmg *= (source && source.critDmg) || 2;
+    crit = true;
+  }
+  if (source && source.execute > 0 && e.type !== 'boss' && e.hp > 0 && e.hp < e.maxHp * 0.22 && Math.random() < source.execute) {
+    dmg = e.hp + 1;
     crit = true;
   }
   e.hp -= dmg;
@@ -537,6 +576,9 @@ function damageEnemy(world, e, dmg, dir, source) {
     if (source) {
       source.kills += 1;
       source.score += Math.round(e.score * mult);
+      if (source.killHeal > 0 && !source.dead) {
+        source.hp = Math.min(source.maxHp, source.hp + source.killHeal);
+      }
     }
 
     const bigKill = e.type === 'boss' || e.type === 'brute';
@@ -548,10 +590,23 @@ function damageEnemy(world, e, dmg, dir, source) {
   }
 }
 
-function damagePlayer(world, p, amount, dir) {
+function damagePlayer(world, p, amount, dir, attacker) {
   if (p.dead || p.downed || p.invuln > 0) return;
-  const reduced = amount * (1 - Math.min(0.75, p.armor));
-  p.hp -= reduced;
+  let dmg = amount * (1 - Math.min(0.75, p.armor));
+  if (p.shield > 0 && dmg > 0) {
+    const absorbed = Math.min(p.shield, dmg);
+    p.shield -= absorbed;
+    dmg -= absorbed;
+    p.shieldCd = Math.max(p.shieldCd, 2);
+    burst(world, p.x + p.w / 2, p.y + p.h / 2, 8, '#7fe7ff', 0.7);
+    if (p.shield <= 0) p.shield = 0;
+  }
+  if (dmg <= 0) {
+    p.invuln = Math.max(p.invuln, 0.35);
+    world.shake = Math.max(world.shake, 5);
+    return;
+  }
+  p.hp -= dmg;
   p.invuln = 0.9;
   p.kb = (dir || 1) * 340;
   p.vy = -280;
@@ -560,6 +615,10 @@ function damagePlayer(world, p, amount, dir) {
   world.hurtFlash = 0.45;
   world.hitStop = Math.max(world.hitStop, 0.06);
   burst(world, p.x + p.w / 2, p.y + p.h / 2, 16, p.color, 1.1);
+
+  if (attacker && attacker.alive && p.hp > 0 && p.thorns > 0) {
+    damageEnemy(world, attacker, p.thorns, Math.sign((attacker.x + attacker.w / 2) - (p.x + p.w / 2)) || 1, p);
+  }
 
   if (p.hp <= 0) {
     p.hp = 0;
@@ -594,8 +653,10 @@ function createEnemy(world, sp) {
   const T = ENEMY_TYPES[sp.type];
   let hpMult = Math.min(1 + (world.wave - 1) * 0.06, 2.8);
   let spdMult = Math.min(1 + (world.wave - 1) * 0.018, 1.8);
-  if (world.solo) hpMult *= 0.9;
-  else if (world.playerCount > 2) hpMult *= 1 + (world.playerCount - 2) * 0.06;
+  if (world.solo) {
+    hpMult *= 0.9;
+    if (sp.type === 'boss') hpMult *= 0.62;
+  } else if (world.playerCount > 2) hpMult *= 1 + (world.playerCount - 2) * 0.06;
   if (sp.type === 'boss') {
     const bossWave = Math.floor(world.wave / 5);
     hpMult *= 1 + bossWave * 0.7;
@@ -612,7 +673,7 @@ function createEnemy(world, sp) {
     hp: T.hp * hpMult,
     maxHp: T.hp * hpMult,
     speed: T.speed * spdMult,
-    dmg: T.dmg,
+    dmg: T.dmg * (world.solo ? 0.82 : 1),
     score: T.score,
     color: T.color,
     facing: -1,
@@ -696,7 +757,7 @@ function aiGrunt(world, e, dt, p) {
     else if (Math.abs(e.vx) < 20 && dist > 80 && Math.random() < 0.15) { e.vy = -780; e.jumpCd = 1.2; }
   }
   if (e.contactCd <= 0 && aabb(p, e)) {
-    damagePlayer(world, p, e.dmg, dir);
+    damagePlayer(world, p, e.dmg, dir, e);
     e.contactCd = 0.9;
   }
 }
@@ -741,7 +802,7 @@ function aiBrute(world, e, dt, p) {
       };
       burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 14, '#ff3030', 1);
       world.shake = Math.max(world.shake, 10);
-      if (aabb(hb, p)) damagePlayer(world, p, e.dmg, e.facing);
+      if (aabb(hb, p)) damagePlayer(world, p, e.dmg, e.facing, e);
     }
   } else if (e.st === 'strike') {
     e.vx = 0;
@@ -786,6 +847,7 @@ function aiThrower(world, e, dt, p) {
       vy: Math.sin(ang) * 430,
       r: 6, life: 3,
       friendly: false,
+      source: e,
     });
     burst(world, ex, ey, 5, '#ff8a6a', 0.5);
   }
@@ -830,7 +892,7 @@ function aiBoss(world, e, dt, p) {
       world.hitStop = Math.max(world.hitStop, 0.08);
       for (const pl of Object.values(world.players)) {
         if (pl.dead || pl.downed) continue;
-        if (aabb(hb, pl)) damagePlayer(world, pl, e.dmg, dir);
+        if (aabb(hb, pl)) damagePlayer(world, pl, e.dmg, dir, e);
       }
     }
   } else if (e.st === 'slamLand') {
@@ -855,6 +917,7 @@ function aiBoss(world, e, dt, p) {
           vy: Math.sin(ang) * 430,
           r: 9, life: 3,
           friendly: false,
+          source: e,
         });
       }
       burst(world, e.x + e.w / 2, e.y + e.h * 0.4, 20, '#ff8a6a', 1.2);
@@ -868,7 +931,7 @@ function aiBoss(world, e, dt, p) {
     for (const pl of Object.values(world.players)) {
       if (pl.dead || pl.downed) continue;
       if (aabb(pl, e)) {
-        damagePlayer(world, pl, e.dmg * 0.6, dir);
+        damagePlayer(world, pl, e.dmg * 0.6, dir, e);
         e.contactCd = 1.0;
         break;
       }
@@ -882,6 +945,29 @@ function aiBoss(world, e, dt, p) {
 
 function updateProjectiles(world, dt) {
   for (const [id, b] of Object.entries(world.projectiles)) {
+    if (b.friendly && b.homing > 0) {
+      let target = null;
+      let bestD = Infinity;
+      for (const e of Object.values(world.enemies)) {
+        if (!e.alive) continue;
+        if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
+        const d = dist2(b.x, b.y, e.x + e.w / 2, e.y + e.h / 2);
+        if (d < bestD) { bestD = d; target = e; }
+      }
+      if (target) {
+        const want = Math.atan2((target.y + target.h / 2) - b.y, (target.x + target.w / 2) - b.x);
+        const cur = Math.atan2(b.vy, b.vx);
+        let diff = want - cur;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        const turn = Math.min(Math.abs(diff), b.homing * dt);
+        const ang = cur + Math.sign(diff) * turn;
+        const sp = Math.hypot(b.vx, b.vy);
+        b.vx = Math.cos(ang) * sp;
+        b.vy = Math.sin(ang) * sp;
+      }
+    }
+
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
@@ -904,7 +990,7 @@ function updateProjectiles(world, dt) {
         if (!e.alive) continue;
         if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
         if (aabb(br, e)) {
-          damageEnemy(world, e, b.damage, Math.sign(b.vx) || 1, b.source || null);
+          damageEnemy(world, e, b.damage, Math.sign(b.vx) || 1, b.source || null, b.critBonus || 0);
           if (b._hitEnemies) b._hitEnemies.add(e.id);
           if (b.pierce > 0) b.pierce--;
           else dead = true;
@@ -918,7 +1004,7 @@ function updateProjectiles(world, dt) {
       for (const p of Object.values(world.players)) {
         if (p.dead || p.downed) continue;
         if (aabb(br, p)) {
-          damagePlayer(world, p, 8, Math.sign(b.vx) || 1);
+          damagePlayer(world, p, 8, Math.sign(b.vx) || 1, b.source || null);
           dead = true;
           break;
         }
@@ -998,8 +1084,9 @@ function updatePickups(world, dt) {
 
     if (d2 < 27 * 27) {
       if (k.type === 'coin') {
-        world.coins += k.value;
-        world.stats.coinsEarned += k.value;
+        const gain = Math.max(1, Math.round(k.value * (near.coinMult || 1)));
+        world.coins += gain;
+        world.stats.coinsEarned += gain;
       } else {
         gainXp(world, k.value * near.xpMult, near);
       }
@@ -1059,7 +1146,7 @@ function spawnWave(world, n) {
   const list = [];
   if (n > 0 && n % 5 === 0) {
     list.push('boss');
-    const minions = Math.min(2 + Math.floor(n / 5), 5);
+    const minions = Math.min(1 + Math.floor(n / 5), 5);
     for (let i = 0; i < minions; i++) list.push('grunt');
   } else {
     const solo = !!world.solo;
@@ -1156,9 +1243,10 @@ function updateWaves(world, dt) {
 export function openShop(world) {
   world.status = 'shop';
   world.phase = 'shop';
+  world.banner.t = 0;
   for (const p of Object.values(world.players)) {
     if (p.dead) continue;
-    p.shopOffers = rollOffers(world.wave, p.shopLevels);
+    p.shopOffers = rollOffers(world.wave, p.shopLevels, p);
     p.ready = false;
   }
 }

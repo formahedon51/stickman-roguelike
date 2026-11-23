@@ -2,8 +2,8 @@ import { createRenderer } from './render.js';
 import { createInput } from './input.js';
 import { createUI } from './ui.js';
 import { createDemo } from './demo.js';
-import { createP2PHost, createP2PGuest } from './p2p.js';
 import { createAudio } from './audio.js';
+import { getWeapon } from '../shared/weapons.js';
 
 const canvas = document.getElementById('game');
 const renderer = createRenderer(canvas);
@@ -20,11 +20,7 @@ let lastInput = null;
 
 const ui = createUI({
   onSolo: startSolo,
-  onDemo: startDemo,
-  onCreate: createRoom,
-  onJoin: joinRoom,
-  onStart: startRoom,
-  onLobbyLeave: () => leaveSession(),
+  onBot: startBot,
   onPause: togglePause,
   onRestart: () => {
     if (!session) return;
@@ -32,6 +28,7 @@ const ui = createUI({
     ui.hideGameOver();
   },
   onMenu: () => leaveSession(),
+  onSpeed: cycleBotSpeed,
   onBuy: (index) => {
     if (session && session.buy) session.buy(index);
   },
@@ -45,17 +42,26 @@ function begin(adapter) {
   selfId = adapter.sessionId;
   active = true;
   paused = false;
+  lastInput = null;
 
   ui.hideMenu();
-  ui.hideLobby();
   ui.showHud();
   ui.hideGameOver();
   ui.hideShop();
   ui.setPaused(false);
   ui.setMenuStatus('');
+  ui.setBotMode(!!adapter.isBot);
+  if (adapter.isBot) ui.setSpeed(adapter.getSpeed ? adapter.getSpeed() : 1);
+  prevState.hp = null;
+  prevState.coins = null;
+  prevState.level = null;
+  prevState.wave = null;
+  prevState.downed = null;
+  prevState.attackT = 0;
+  prevState.shootT = 0;
 
   const pauseBtn = document.getElementById('pauseBtn');
-  if (pauseBtn) pauseBtn.style.display = adapter.isSolo ? '' : 'none';
+  if (pauseBtn) pauseBtn.style.display = adapter.canPause ? '' : 'none';
 
   clearInterval(inputTimer);
   let prevInput = input.snapshot();
@@ -63,12 +69,12 @@ function begin(adapter) {
     const cur = input.snapshot();
     lastInput = cur;
     if (active && session && session.sessionId) session.sendInput(cur);
-    if (active) {
-      const me = state && state.players && state.players[session && session.sessionId];
+    if (active && session && !session.isBot) {
+      const me = state && state.players && state.players[session.sessionId];
       if (cur.jump && !prevInput.jump) audio.sfx.jump();
       if (cur.dash && !prevInput.dash) audio.sfx.dash();
       if (cur.attack && !prevInput.attack) {
-        if (me && me.weapon === 'gun') audio.sfx.shoot();
+        if (me && getWeapon(me.weapon).kind === 'ranged') audio.sfx.shoot();
         else audio.sfx.attack();
       }
       if (cur.swap && !prevInput.swap) audio.sfx.swap();
@@ -77,12 +83,12 @@ function begin(adapter) {
   }, 1000 / 30);
 }
 
-function startLocal(solo) {
+function startRun(mode) {
   if (session) leaveSession();
   const adapter = createDemo({
     name: ui.getName(),
     clazz: ui.getClass(),
-    solo,
+    mode,
     onState: (s) => { state = s; },
     onGameOver: (stats) => ui.showGameOver(stats),
   });
@@ -90,83 +96,27 @@ function startLocal(solo) {
 }
 
 function startSolo() {
-  startLocal(true);
+  startRun('solo');
 }
 
-function startDemo() {
-  startLocal(false);
+function startBot() {
+  startRun('bot');
+}
+
+function cycleBotSpeed() {
+  if (!session || !session.isBot || !session.setSpeed) return;
+  const current = session.getSpeed ? session.getSpeed() : 1;
+  const next = current === 1 ? 2 : current === 2 ? 4 : current === 4 ? 8 : 1;
+  session.setSpeed(next);
+  ui.setSpeed(next);
 }
 
 function togglePause() {
-  if (!session || !session.isSolo) return;
-  if (!state || state.status !== 'playing') return;
+  if (!session || !session.canPause) return;
+  if (!state || state.status === 'game_over') return;
   paused = !paused;
   session.setPaused(paused);
   ui.setPaused(paused);
-}
-
-function createRoom() {
-  if (session) leaveSession();
-  const adapter = createP2PHost({
-    name: ui.getName(),
-    clazz: ui.getClass(),
-    onLobby: (data) => {
-      if (data.started) ui.hideLobby();
-      else ui.showLobby(data);
-    },
-    onState: (s) => { state = s; },
-    onGameOver: (stats) => ui.showGameOver(stats),
-    onStarted: () => begin(adapter),
-    onError: (msg) => {
-      ui.hideLobby();
-      ui.showMenu();
-      ui.setMenuStatus(msg, 'err');
-      if (session === adapter) session = null;
-    },
-    onEnd: () => { /* хост сам завершает */ },
-  });
-  session = adapter;
-}
-
-function joinRoom() {
-  const code = ui.getCode();
-  if (code.length !== 6) {
-    ui.setMenuStatus('Код комнаты — 6 символов', 'err');
-    return;
-  }
-  if (session) leaveSession();
-  const adapter = createP2PGuest({
-    code,
-    name: ui.getName(),
-    clazz: ui.getClass(),
-    onLobby: (data) => {
-      if (data.started) ui.hideLobby();
-      else ui.showLobby(data);
-    },
-    onState: (s) => { state = s; },
-    onStarted: () => begin(adapter),
-    onError: (msg) => {
-      ui.hideLobby();
-      ui.showMenu();
-      ui.setMenuStatus(msg, 'err');
-      if (session === adapter) session = null;
-    },
-    onEnd: (msg) => {
-      if (active) {
-        leaveSession(msg || 'Соединение с хостом закрыто.');
-      } else {
-        ui.hideLobby();
-        ui.showMenu();
-        ui.setMenuStatus(msg || 'Соединение закрыто', 'warn');
-        if (session === adapter) session = null;
-      }
-    },
-  });
-  session = adapter;
-}
-
-function startRoom() {
-  if (session && session.isHost && session.start) session.start();
 }
 
 function leaveSession(message) {
@@ -188,14 +138,17 @@ function leaveSession(message) {
   ui.hideHud();
   ui.hideGameOver();
   ui.hideShop();
-  ui.hideLobby();
+  ui.setBotMode(false);
   ui.showMenu();
 
   if (message) ui.setMenuStatus(message, 'warn');
 }
 
 let last = 0;
-const prevState = { hp: null, coins: null, level: null, wave: null, downed: null };
+const prevState = {
+  hp: null, coins: null, level: null, wave: null, downed: null,
+  attackT: 0, shootT: 0,
+};
 function trackSounds(stateNow, id) {
   if (!stateNow) return;
   const me = stateNow.players && stateNow.players[id];
@@ -203,8 +156,16 @@ function trackSounds(stateNow, id) {
     if (prevState.hp != null && me.hp < prevState.hp - 1 && !me.dead) audio.sfx.hurt();
     if (prevState.downed === false && me.downed) audio.sfx.downed();
     if (prevState.downed === true && !me.downed && !me.dead) audio.sfx.revive();
+    if (session && session.isBot) {
+      if ((me.attackT || 0) > 0 && !(prevState.attackT > 0)) audio.sfx.attack();
+      if ((me.shootT || 0) > 0 && !(prevState.shootT > 0)) {
+        audio.sfx.shoot();
+      }
+    }
     prevState.hp = me.hp;
     prevState.downed = me.downed;
+    prevState.attackT = me.attackT || 0;
+    prevState.shootT = me.shootT || 0;
   }
   if (prevState.coins != null && stateNow.coins > prevState.coins) audio.sfx.coin();
   prevState.coins = stateNow.coins;
@@ -251,7 +212,7 @@ window.addEventListener('keydown', (e) => {
     const m = audio.toggle();
     if (muteBtn) muteBtn.textContent = m ? '🔇' : '🔊';
   }
-  if ((e.code === 'Escape' || e.code === 'KeyP') && session && session.isSolo) {
+  if ((e.code === 'Escape' || e.code === 'KeyP') && session && session.canPause) {
     e.preventDefault();
     togglePause();
   }
@@ -265,4 +226,5 @@ window.__RG_DEBUG__ = {
   setState: (s) => { state = s; },
   getInput: () => input.snapshot(),
   getLastInput: () => lastInput,
+  getBotInfo: () => (session && session.getBotInfo ? session.getBotInfo() : null),
 };

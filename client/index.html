@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>STICKMAN CO-OP · ROGUELIKE</title>
+<title>Untitled X</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -11,27 +11,39 @@
 <canvas id="game"></canvas>
 
 <div id="hud" class="hidden">
-  <div class="hud-left">
-    <div id="playersHud"></div>
-    <div id="levelRow">
+  <div class="hud-card player-card">
+    <div class="pc-top">
+      <span id="classIcon" class="pc-class-icon">⚔</span>
+      <span id="playerName" class="pc-name">Игрок</span>
+      <span id="botBadge" class="bot-badge hidden">БОТ</span>
+      <span id="hpText" class="pc-hp">100/100</span>
+    </div>
+    <div class="hpbar"><i id="hpFill"></i></div>
+    <div id="shieldWrap" class="shieldbar hidden"><i id="shieldFill"></i></div>
+    <div class="pc-xp">
       <span class="lvl">LV <b id="lvlNum">1</b></span>
       <div class="xpbar"><i id="xpFill"></i></div>
       <span id="xpNum">0/30</span>
+    </div>
+    <div class="pc-weapon">
+      <span id="weaponIcon" class="pw-icon">⚔</span>
+      <span id="weaponLbl">МЕЧ</span>
+      <span id="swapHint" class="pw-hint">Q ⇄</span>
     </div>
   </div>
 
   <div id="centerHud">
     <div id="waveLbl">ВОЛНА 1</div>
-    <div id="weaponLbl">⚔ МЕЧ · Q</div>
-    <div id="comboLbl"></div>
     <div id="enemyLbl">ВРАГОВ 0</div>
+    <div id="comboLbl"></div>
   </div>
 
-  <div id="rightHud">
-    <div id="coinLbl">◆ 0</div>
-    <div id="scoreLbl">★ 0</div>
+  <div class="hud-card right-card">
+    <div class="hud-stat"><span class="hs-icon">◆</span><b id="coinLbl">0</b></div>
+    <div class="hud-stat"><span class="hs-icon">★</span><b id="scoreLbl">0</b></div>
     <div class="hud-row">
-      <button id="pauseBtn" class="hud-btn" type="button" style="display:none" title="Пауза (Esc)">II</button>
+      <button id="speedBtn" class="hud-btn hidden" type="button" title="Скорость бота">×1</button>
+      <button id="pauseBtn" class="hud-btn" type="button" title="Пауза (Esc)">II</button>
       <button id="muteBtn" class="hud-btn" type="button" title="Звук (M)">🔊</button>
       <button id="btnLeave" class="hud-btn" type="button">В МЕНЮ</button>
     </div>
@@ -45,8 +57,8 @@
 
 <div id="menu" class="overlay show">
   <div class="menu-box">
-    <h1>STICKMAN <span>CO-OP</span></h1>
-    <p class="sub">Один или с друзьями · волны · магазин · P2P</p>
+    <h1>UNTITLED <span>X</span></h1>
+    <p class="sub">Рогалик · классы · оружие · прокачка</p>
 
     <div class="class-picker" id="classPicker"></div>
 
@@ -54,55 +66,29 @@
       <label>ИМЯ
         <input id="nameInput" maxlength="14" placeholder="Игрок" autocomplete="off">
       </label>
-      <label>КОД КОМНАТЫ
-        <input id="codeInput" placeholder="XXXXXX" maxlength="6" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
-      </label>
     </div>
 
     <div class="buttons">
-      <button id="btnSolo" class="primary" type="button">▶ ОДИНОЧНАЯ ИГРА</button>
-      <button id="btnDemo" class="alt" type="button">ИГРА С БОТАМИ</button>
+      <button id="btnSolo" class="primary" type="button">▶ ИГРАТЬ</button>
+      <button id="btnBot" class="alt" type="button">🤖 БОТ-ЗАБЕГ</button>
       <button id="btnHelp" class="alt" type="button">? УПРАВЛЕНИЕ</button>
-    </div>
-
-    <div class="buttons">
-      <button id="btnCreate" class="alt" type="button">СОЗДАТЬ КОМНАТУ</button>
-      <button id="btnJoin" class="alt" type="button">ВОЙТИ ПО КОДУ</button>
     </div>
 
     <div id="menuStatus"></div>
 
     <div class="note">
-      P2P без сервера: хост создаёт комнату в браузере, гости входят по коду.
-      Платный сервер не нужен. Свой сигналинг: <b>?server=host:port:path</b>.
+      Одиночный забег. Выбери класс, переживи волны и собери арсенал.
+      В режиме <b>БОТ-ЗАБЕГ</b> настроенный бот сам проходит игру — можно ускорить и наблюдать.
     </div>
 
     <div class="keys">A/D — движение · Space — прыжок · Shift — рывок · J — атака · Q — смена оружия</div>
   </div>
 </div>
 
-<div id="lobby" class="overlay">
-  <div class="menu-box">
-    <h1>КОМНАТА</h1>
-    <p class="sub">Передай другу код или ссылку:</p>
-    <div class="code" id="roomCode">------</div>
-    <div class="buttons">
-      <button id="btnCopyCode" class="alt" type="button">КОПИРОВАТЬ КОД</button>
-      <button id="btnCopyLink" class="alt" type="button">КОПИРОВАТЬ ССЫЛКУ</button>
-    </div>
-    <div id="lobbyPlayers" class="lobby-players"></div>
-    <div id="lobbyStatus"></div>
-    <div class="buttons">
-      <button id="btnStart" class="primary" type="button">НАЧАТЬ</button>
-      <button id="btnLobbyLeave" class="alt" type="button">ВЫЙТИ</button>
-    </div>
-  </div>
-</div>
-
 <div id="shop" class="overlay">
   <div class="menu-box">
     <h1>МАГАЗИН</h1>
-    <p class="sub">Улучшения между волнами. Монеты общие — тратьте с умом.</p>
+    <p class="sub">Улучшения и новое оружие между волнами.</p>
     <div id="shopCoins">◆ 0</div>
     <div class="shop-grid" id="shopOffers"></div>
     <div id="shopStatus"></div>
@@ -119,11 +105,12 @@
       <div class="tut-col">
         <h3>КЛАВИАТУРА</h3>
         <div class="row"><b>A / D / ← →</b> — движение</div>
-        <div class="row"><b>W / Space / ↑</b> — прыжок (двойной после улучшения)</div>
-        <div class="row"><b>Shift</b> — рывок</div>
+        <div class="row"><b>W / Space / ↑</b> — прыжок</div>
+        <div class="row"><b>Shift</b> — рывок (неуязвимость)</div>
         <div class="row"><b>J / Z</b> — атака текущим оружием</div>
-        <div class="row"><b>Q / E</b> — сменить меч ↔ пистолет</div>
-        <div class="row"><b>Space / 1–3</b> — магазин</div>
+        <div class="row"><b>Q / E</b> — следующее оружие из арсенала</div>
+        <div class="row"><b>1–3 / Space</b> — магазин</div>
+        <div class="row"><b>Esc / P</b> — пауза</div>
       </div>
       <div class="tut-col">
         <h3>ТЕЛЕФОН</h3>
@@ -135,8 +122,9 @@
       </div>
     </div>
     <div class="tut-tips">
-      <b>Советы:</b> монеты общие · рывок даёт неуязвимость · если напарник упал — стой рядом ·
-      каждая 5-я волна — босс · серия убийств повышает очки · криты, магнит и двойной прыжок — в магазине.
+      <b>Советы:</b> у каждого класса свой арсенал · в магазине можно докупить оружие ·
+      босс каждые 5 волн · криты, щит, казнь и двойной прыжок — в прокачке ·
+      «БОТ-ЗАБЕГ» показывает, как играет умный бот.
     </div>
     <div class="buttons"><button id="btnTutorialOk" class="primary" type="button">ПОНЯТНО</button></div>
   </div>
@@ -179,8 +167,6 @@
   </div>
 </div>
 
-<script src="vendor/peerjs.min.js"></script>
-<script src="js/config.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

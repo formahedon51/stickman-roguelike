@@ -51,11 +51,8 @@ export const PLAYER_COLORS = [
   '#b79cff', '#5eead4', '#ff9f68', '#f472b6',
 ];
 
-export const TICK_RATE = 20;        // сервер/демо: 20 тиков в секунду
-export const INPUT_RATE = 30;       // клиент: 30 отправок ввода в секунду
-export const MAX_PLAYERS = 8;
+export const TICK_RATE = 20;        // тиков симуляции в секунду
 export const MAX_ACTIVE_ENEMIES = 8;
-export const ROOM_NAME = 'roguelike_room';
 
 export const COMBO_TIME = 3.0;
 export const REVIVE_RANGE = 90;

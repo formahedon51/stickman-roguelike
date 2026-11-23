@@ -1,5 +1,6 @@
-// Canvas-рендер состояния. Внешний вид — из предыдущей версии STICKMAN CO-OP.
+// Canvas-рендер состояния для Untitled X.
 import { ARENA, PLATFORMS } from '../shared/constants.js';
+import { getWeapon } from '../shared/weapons.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -390,7 +391,7 @@ export function createRenderer(canvas) {
     let weapon = null;
     if (e.type === 'boss') weapon = 'axe';
     else if (e.type === 'brute') weapon = 'sword';
-    else if (e.type === 'thrower') weapon = 'gun';
+    else if (e.type === 'thrower') weapon = 'pistol';
 
     let attackT = 0;
     if (e.type === 'boss' && e.st === 'slamWindup') attackT = 0.7;
@@ -458,7 +459,7 @@ export function createRenderer(canvas) {
       phase: p.anim || 0,
       attackT: clamp((p.attackT || 0) / 0.24, 0, 1),
       shootT: clamp((p.shootT || 0) / 0.18, 0, 1),
-      weapon: p.weapon === 'gun' ? 'gun' : 'sword',
+      weapon: p.weapon || 'sword',
       glow: 8,
       scarf: true,
       airborne: p.onGround === false,
@@ -527,30 +528,42 @@ export function createRenderer(canvas) {
     const x = v.rx;
     const y = v.ry;
     const r = b.r || 5;
+    const color = b.color || (b.friendly ? '#d8c8ff' : '#ffb080');
     const sp = Math.hypot(b.vx || 0, b.vy || 0);
     if (sp > 1) {
       const nx = b.vx / sp;
       const ny = b.vy / sp;
-      const tlen = Math.min(28, Math.max(6, sp * 0.035));
-      const grad = ctx.createLinearGradient(x, y, x - nx * tlen, y - ny * tlen);
-      grad.addColorStop(0, b.friendly ? 'rgba(216,200,255,0.85)' : 'rgba(255,157,128,0.85)');
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = r * 1.6;
+      const tlen = Math.min(34, Math.max(6, sp * 0.035));
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = r * 1.5;
       ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x - nx * tlen, y - ny * tlen);
       ctx.stroke();
+      ctx.restore();
     }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = b.friendly ? 'rgba(183,156,255,0.16)' : 'rgba(255,138,106,0.16)';
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(x, y, r * 3.2, 0, Math.PI * 2);
+    ctx.arc(x, y, r * 3.1, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-    ctx.fillStyle = b.friendly ? '#d8c8ff' : '#ffb080';
+    if (b.kind === 'staff') {
+      ctx.save();
+      ctx.globalAlpha = 0.65;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 1.7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -755,7 +768,7 @@ export function createRenderer(canvas) {
     else if (o.airborne) ab = -2.0;
     else ab = s * 0.85 - 0.12;
 
-    if (attack > 0 && o.weapon === 'sword') {
+    if (attack > 0 && getWeapon(o.weapon).kind === 'melee') {
       const trailStart = attack < 0.7 ? 0 : -0.2;
       const trailEnd = aa;
       if (trailEnd > trailStart) {
@@ -839,7 +852,7 @@ export function createRenderer(canvas) {
       ctx.moveTo(0, -size * 0.1);
       ctx.lineTo(0, -size * 0.85);
       ctx.stroke();
-    } else if (type === 'gun') {
+    } else if (type === 'gun' || type === 'pistol') {
       ctx.fillStyle = '#2a2a2a';
       ctx.fillRect(-size * 0.05, 0, size * 0.1, size * 0.15);
       ctx.fillStyle = '#333';
@@ -866,6 +879,64 @@ export function createRenderer(canvas) {
       ctx.moveTo(-size * 0.4, -size * 0.75);
       ctx.lineTo(-size * 0.35, -size * 0.55);
       ctx.stroke();
+    } else if (type === 'dagger') {
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(-size * 0.05, 0, size * 0.1, size * 0.14);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(-size * 0.045, -size * 0.02);
+      ctx.lineTo(0, -size * 0.42);
+      ctx.lineTo(size * 0.045, -size * 0.02);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = Math.max(0.6, size * 0.018);
+      ctx.beginPath();
+      ctx.moveTo(0, -size * 0.06);
+      ctx.lineTo(0, -size * 0.38);
+      ctx.stroke();
+    } else if (type === 'shotgun') {
+      ctx.fillStyle = '#4a3322';
+      ctx.fillRect(-size * 0.055, -size * 0.02, size * 0.11, size * 0.3);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(-size * 0.17, -size * 0.22, size * 0.34, size * 0.09);
+      ctx.fillStyle = '#555';
+      ctx.fillRect(-size * 0.11, -size * 0.62, size * 0.08, size * 0.4);
+      ctx.fillRect(size * 0.03, -size * 0.62, size * 0.08, size * 0.4);
+      ctx.fillStyle = color;
+      ctx.fillRect(-size * 0.15, -size * 0.25, size * 0.3, size * 0.025);
+    } else if (type === 'rifle') {
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(-size * 0.05, 0, size * 0.1, size * 0.22);
+      ctx.fillStyle = '#3c3c3c';
+      ctx.fillRect(-size * 0.07, -size * 0.71, size * 0.14, size * 0.55);
+      ctx.fillStyle = color;
+      ctx.fillRect(-size * 0.09, -size * 0.5, size * 0.18, size * 0.035);
+      ctx.fillStyle = '#666';
+      ctx.fillRect(-size * 0.02, -size * 0.8, size * 0.1, size * 0.05);
+    } else if (type === 'staff') {
+      ctx.strokeStyle = '#5a4330';
+      ctx.lineWidth = Math.max(2, size * 0.055);
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.12);
+      ctx.lineTo(0, -size * 0.8);
+      ctx.stroke();
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.28;
+      ctx.beginPath();
+      ctx.arc(0, -size * 0.88, size * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(0, -size * 0.88, size * 0.09, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath();
+      ctx.arc(-size * 0.02, -size * 0.91, size * 0.03, 0, Math.PI * 2);
+      ctx.fill();
     }
     if (attack > 0) {
       ctx.globalAlpha = attack * 0.25;
