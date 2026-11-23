@@ -97,8 +97,7 @@ client/
 │   ├── demo.js        # соло и бот-забег
 │   ├── bot.js         # умный авто-бот
 │   ├── input.js       # клавиатура + тач
-│   ├── audio.js       # SFX
-│   └── config.js
+│   └── audio.js       # SFX
 └── shared/
     ├── constants.js
     ├── classes.js     # классы и арсеналы
