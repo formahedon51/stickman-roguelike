@@ -4,10 +4,10 @@ import {
   ARENA, SOLIDS, PLAYER, ENEMY_TYPES, GRAVITY, MAX_ACTIVE_ENEMIES,
   COMBO_TIME, REVIVE_RANGE, REVIVE_TIME, REVIVE_BLEEDOUT, REVIVE_HP_PCT,
   WAVE_TIME_LIMIT, MAX_PARTICLES, PLAYER_COLORS,
-} from './constants.js?v=20261123';
-import { RARITY_MULT, rollOffers } from './upgrades.js?v=20261123';
-import { applyClass } from './classes.js?v=20261123';
-import { getWeapon } from './weapons.js?v=20261123';
+} from './constants.js?v=20261123b';
+import { RARITY_MULT, rollOffers, offerPrice } from './upgrades.js?v=20261123b';
+import { applyClass } from './classes.js?v=20261123b';
+import { getWeapon, getWeaponMod } from './weapons.js?v=20261123b';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -129,11 +129,29 @@ export function makePlayer(def, index = 0, solo = false) {
     dashSpeed: 900, dashDur: 0.17, dashDamage: 0, dashInvuln: 0,
     regenT: 0, regenDelay: 3.5, regenRate: 6,
     moveSpeed: 290, jumpPower: 830, armor: 0, xpMult: 1,
-    crit: 0, critDmg: 2, magnetRange: 170, doubleJump: 0, jumpsLeft: 0,
+    crit: 0, critDmg: 2, magnetRange: 170, doubleJump: 0, extraJump: 0, jumpsLeft: 0,
     retarget: 0,
     shield: 0, shieldMax: 0, shieldCd: 0, shieldCdMax: 10,
     bossDmg: 0, lowHpDmg: 0, coinMult: 1,
     killHeal: 0, thorns: 0, execute: 0,
+    damageMult: 1, rangedMult: 1, meleeMult: 1,
+    shootRateMult: 1, attackRateMult: 1,
+    projSpeedMult: 1, projLifeMult: 1,
+    kbPower: 1, kbResist: 0,
+    weaponMods: {},
+    burnChance: 0, burnDps: 0,
+    poisonChance: 0, poisonDps: 0,
+    slowChance: 0, slowPower: 0, slowTime: 2.5,
+    vulnChance: 0, vulnPower: 0,
+    chainChance: 0, chainDmg: 0, chainRange: 190,
+    explodeChance: 0, explodeDmg: 0, explodeRadius: 0,
+    coinOnKill: 0, shieldOnKill: 0, bossKillHeal: 0,
+    fullHpDmg: 0, airDmg: 0, closeDmg: 0, farDmg: 0,
+    eliteDmg: 0, comboDmg: 0, stationaryDmg: 0, movingDmg: 0,
+    dashBuffDmg: 0, dashBuffT: 0, lastStandDmg: 0,
+    contactArmor: 0, projArmor: 0, dodge: 0, hitInvuln: 0,
+    accelMult: 1, lastStandArmor: 0,
+    discount: 0, interest: 0, luck: 0, bounty: 0,
     damageThisWave: 0, jumpAnim: 0, landAnim: 0,
     _prevOnGround: false, _prevJump: false, _prevDash: false, _prevSwap: false,
     intent: emptyInput(),
@@ -357,6 +375,7 @@ function updatePlayerPhysics(world, p, dt) {
   if (p.invuln > 0) p.invuln -= dt;
   if (p.dashCd > 0) p.dashCd -= dt;
   if (p.switchCd > 0) p.switchCd = Math.max(0, p.switchCd - dt);
+  if (p.dashBuffT > 0) p.dashBuffT = Math.max(0, p.dashBuffT - dt);
   if (p.shootCd > 0) p.shootCd -= dt;
   if (p.shootT > 0) p.shootT -= dt;
 
@@ -420,7 +439,7 @@ function updatePlayerPhysics(world, p, dt) {
   if (moveX < 0 && atLeftWall) moveX = 0;
   if (moveX > 0 && atRightWall) moveX = 0;
 
-  const accel = p.onGround ? 3200 : 1900;
+  const accel = (p.onGround ? 3200 : 1900) * (p.accelMult || 1);
   if (moveX < 0) { p.vx -= accel * dt; p.facing = -1; }
   else if (moveX > 0) { p.vx += accel * dt; p.facing = 1; }
   else {
@@ -432,7 +451,7 @@ function updatePlayerPhysics(world, p, dt) {
 
   if (p.onGround) {
     p.coyote = 0.1;
-    p.jumpsLeft = p.doubleJump;
+    p.jumpsLeft = p.doubleJump + (p.extraJump || 0);
   } else {
     p.coyote -= dt;
   }
@@ -445,7 +464,7 @@ function updatePlayerPhysics(world, p, dt) {
       p.onGround = false;
       p.coyote = 0;
       p.jumpAnim = 1.0;
-    } else if (p.doubleJump > 0 && p.jumpsLeft > 0) {
+    } else if ((p.doubleJump > 0 || p.extraJump > 0) && p.jumpsLeft > 0) {
       p.vy = -p.jumpPower * 0.92;
       p.jumpsLeft--;
       p.jumpAnim = 1.0;
@@ -489,6 +508,7 @@ function tryDash(world, p) {
   p.facing = p.dashDir;
   p.vy = 0;
   p.invuln = Math.max(p.invuln, p.dashDur + 0.06 + (p.dashInvuln || 0));
+  if (p.dashBuffDmg > 0) p.dashBuffT = 1.4;
   for (const e of Object.values(world.enemies)) e._dashHit = false;
   burst(world, p.x + p.w / 2, p.y + p.h * 0.5, 9, p.color, 0.75);
 }
@@ -518,13 +538,15 @@ function tryAttack(world, p) {
 
 function tryMelee(world, p, w) {
   if (p.dead || p.downed || p.attackCd > 0 || p.attackT > 0) return;
-  p.attackCd = p.attackCdMax * (w.cooldown || 1);
+  const mod = getWeaponMod(p, p.weapon);
+  p.attackCd = Math.max(0.05, p.attackCdMax * (w.cooldown || 1) *
+    (p.attackRateMult || 1) * (1 - (mod.cooldown || 0)));
   p.attackT = 0.24 * (w.anim || 1);
-  doPlayerHit(world, p, w);
+  doPlayerHit(world, p, w, mod);
 }
 
-function doPlayerHit(world, p, w) {
-  const R = p.attackRange * (w.range || 1);
+function doPlayerHit(world, p, w, mod) {
+  const R = p.attackRange * (w.range || 1) * (1 + (mod.range || 0));
   const hh = (p.h - 8) * (w.height || 1);
   const hb = {
     x: p.facing > 0 ? p.x + p.w - 8 : p.x + 8 - R,
@@ -532,12 +554,14 @@ function doPlayerHit(world, p, w) {
     w: R,
     h: hh,
   };
+  const dmg = p.damage * (w.damage || 1) * (p.damageMult || 1) *
+    (p.meleeMult || 1) * (1 + (mod.damage || 0));
   let hit = false;
   for (const e of Object.values(world.enemies)) {
     if (!e.alive) continue;
     if (aabb(hb, enemyHurtbox(e))) {
       hit = true;
-      damageEnemy(world, e, p.damage * (w.damage || 1), p.facing, p, w.critBonus || 0);
+      damageEnemy(world, e, dmg, p.facing, p, (w.critBonus || 0) + (mod.crit || 0));
       if (p.lifesteal > 0 && !p.dead) p.hp = Math.min(p.maxHp, p.hp + p.lifesteal);
     }
   }
@@ -550,10 +574,12 @@ function doPlayerHit(world, p, w) {
 
 function tryShoot(world, p, w) {
   if (p.dead || p.downed || p.shootCd > 0) return;
+  const mod = getWeaponMod(p, p.weapon);
   const originX = p.x + p.w / 2;
   const originY = p.y + p.h * 0.42;
-  const speed = p.shootSpeed * (w.speed || 1);
-  const maxRange = Math.max(140, speed * (w.life || 2) * 1.15);
+  const speed = p.shootSpeed * (w.speed || 1) * (p.projSpeedMult || 1);
+  const life = (w.life || 2) * (p.projLifeMult || 1) * (1 + (mod.life || 0));
+  const maxRange = Math.max(140, speed * life * 1.15);
 
   let target = null;
   let bestScore = Infinity;
@@ -594,7 +620,8 @@ function tryShoot(world, p, w) {
   const baseShots = Math.max(1, w.shots || 1);
   const total = baseShots + (p.multishot || 0);
   const step = w.spread ? w.spread / Math.max(1, total - 1) : 0.16;
-  const damage = p.shootDamage * (w.damage || 1);
+  const damage = p.shootDamage * (w.damage || 1) * (p.damageMult || 1) *
+    (p.rangedMult || 1) * (1 + (mod.damage || 0));
 
   for (let i = 0; i < total; i++) {
     const ang = baseAng + (i - (total - 1) / 2) * step;
@@ -603,11 +630,11 @@ function tryShoot(world, p, w) {
       vx: Math.cos(ang) * speed,
       vy: Math.sin(ang) * speed,
       r: (w.r || 5) + (p.bulletSize || 0),
-      life: w.life || 2,
+      life,
       friendly: true,
       damage,
       pierce: (p.pierce || 0) + (w.pierce || 0),
-      critBonus: w.critBonus || 0,
+      critBonus: (w.critBonus || 0) + (mod.crit || 0),
       homing: w.homing || 0,
       retarget: p.retarget || 0,
       color: w.color || '#d8c8ff',
@@ -616,7 +643,8 @@ function tryShoot(world, p, w) {
       source: p,
     });
   }
-  p.shootCd = p.shootCdMax * (w.cooldown || 1);
+  p.shootCd = Math.max(0.04, p.shootCdMax * (w.cooldown || 1) *
+    (p.shootRateMult || 1) * (1 - (mod.cooldown || 0)));
   p.shootT = 0.18;
   burst(world, handX, handY, 5, w.color || '#b79cff', 0.5);
   world.shake = Math.max(world.shake, w.damage > 1.2 ? 4 : 2);
@@ -635,33 +663,100 @@ function spawnProjectile(world, data) {
 /* Урон                                                                */
 /* ------------------------------------------------------------------ */
 
-function damageEnemy(world, e, dmg, dir, source, critBonus) {
+function damageEnemy(world, e, dmg, dir, source, critBonus, silent) {
   if (!e.alive) return;
+
+  if (e.vulnT > 0) dmg *= 1 + (e.vulnPower || 0);
   if (source && source.bossDmg > 0 && e.type === 'boss') dmg *= 1 + source.bossDmg;
   if (source && source.lowHpDmg > 0 && source.maxHp > 0 && source.hp / source.maxHp <= 0.35) {
     dmg *= 1 + source.lowHpDmg;
   }
+
+  if (source && !silent) {
+    let mult = 1;
+    const dist = Math.hypot(
+      (source.x + source.w / 2) - (e.x + e.w / 2),
+      (source.y + source.h / 2) - (e.y + e.h / 2),
+    );
+    const hpPct = source.maxHp > 0 ? source.hp / source.maxHp : 1;
+    if (source.fullHpDmg > 0 && hpPct >= 0.85) mult += source.fullHpDmg;
+    if (source.lastStandDmg > 0 && hpPct <= 0.3) mult += source.lastStandDmg;
+    if (source.airDmg > 0 && !source.onGround) mult += source.airDmg;
+    if (source.closeDmg > 0 && dist < 160) mult += source.closeDmg;
+    if (source.farDmg > 0 && dist > 420) mult += source.farDmg;
+    if (source.eliteDmg > 0 && (e.type === 'boss' || e.type === 'brute')) mult += source.eliteDmg;
+    if (source.stationaryDmg > 0 && Math.abs(source.vx) < 30) mult += source.stationaryDmg;
+    if (source.movingDmg > 0 && Math.abs(source.vx) > 120) mult += source.movingDmg;
+    if (source.dashBuffDmg > 0 && source.dashBuffT > 0) mult += source.dashBuffDmg;
+    if (source.comboDmg > 0 && world.combo > 1) {
+      mult += Math.min(world.combo, 20) * source.comboDmg;
+    }
+    dmg *= mult;
+  }
+
   let crit = false;
-  const critChance = (source ? source.crit : 0) + (critBonus || 0);
-  if (critChance > 0 && Math.random() < critChance) {
+  const critChance = Math.min(1, (source ? source.crit : 0) + (critBonus || 0));
+  if (!silent && critChance > 0 && Math.random() < critChance) {
     dmg *= (source && source.critDmg) || 2;
     crit = true;
   }
-  if (source && source.execute > 0 && e.type !== 'boss' && e.hp > 0 && e.hp < e.maxHp * 0.22 && Math.random() < source.execute) {
+  if (!silent && source && source.execute > 0 && e.type !== 'boss' && e.hp > 0 && e.hp < e.maxHp * 0.22 && Math.random() < source.execute) {
     dmg = e.hp + 1;
     crit = true;
   }
+
   e.hp -= dmg;
-  e.hitFlash = 0.14;
-  e.kb = dir * (e.type === 'boss' ? 100 : 320);
-  if (e.onGround && e.type !== 'boss') e.vy = -180;
-  burst(world, e.x + e.w / 2, e.y + e.h / 2, 8, crit ? '#ffd54f' : '#ff5b5b', 0.7);
+  if (!silent) {
+    e.hitFlash = 0.14;
+    e.kb = dir * (e.type === 'boss' ? 100 : 320) * (source ? (source.kbPower || 1) : 1);
+    if (e.onGround && e.type !== 'boss') e.vy = -180;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 8, crit ? '#ffd54f' : '#ff5b5b', 0.7);
+  }
 
   if (source) {
     source.damageThisWave += dmg;
     source.fitness = (source.fitness || 0) + dmg * 0.15;
     world.stats.damage += dmg;
-    spawnDmgNumber(world, e.x + e.w / 2, e.y - 5, dmg, crit ? '#ffd54f' : source.color, crit);
+    if (!silent) {
+      spawnDmgNumber(world, e.x + e.w / 2, e.y - 5, dmg, crit ? '#ffd54f' : source.color, crit);
+    }
+  }
+
+  // Аilments применяются только от прямых попаданий, не от DoT.
+  if (source && !silent && e.alive) {
+    if (source.burnChance > 0 && Math.random() < source.burnChance) {
+      e.burnT = Math.max(e.burnT || 0, 3);
+      e.burnDps = Math.max(e.burnDps || 0, source.burnDps || 0);
+      e.burnSource = source;
+    }
+    if (source.poisonChance > 0 && Math.random() < source.poisonChance) {
+      e.poisonT = Math.max(e.poisonT || 0, 3.5);
+      e.poisonDps = Math.max(e.poisonDps || 0, source.poisonDps || 0);
+      e.poisonSource = source;
+    }
+    if (source.slowChance > 0 && Math.random() < source.slowChance) {
+      e.slowT = Math.max(e.slowT || 0, source.slowTime || 2.5);
+      e.slowPower = Math.max(e.slowPower || 0, source.slowPower || 0);
+    }
+    if (source.vulnChance > 0 && Math.random() < source.vulnChance) {
+      e.vulnT = Math.max(e.vulnT || 0, 3);
+      e.vulnPower = Math.max(e.vulnPower || 0, source.vulnPower || 0);
+    }
+    if (source.chainChance > 0 && !source._chaining && Math.random() < source.chainChance) {
+      let chainTarget = null;
+      let bestD = Infinity;
+      const range = source.chainRange || 190;
+      for (const o of Object.values(world.enemies)) {
+        if (!o.alive || o === e) continue;
+        const d = Math.hypot((o.x + o.w / 2) - (e.x + e.w / 2), (o.y + o.h / 2) - (e.y + e.h / 2));
+        if (d < range && d < bestD) { bestD = d; chainTarget = o; }
+      }
+      if (chainTarget) {
+        source._chaining = true;
+        damageEnemy(world, chainTarget, source.chainDmg || 0, dir, source, 0, true);
+        source._chaining = false;
+      }
+    }
   }
 
   if (e.hp <= 0) {
@@ -679,6 +774,32 @@ function damageEnemy(world, e, dmg, dir, source, critBonus) {
       if (source.killHeal > 0 && !source.dead) {
         source.hp = Math.min(source.maxHp, source.hp + source.killHeal);
       }
+      if (source.coinOnKill > 0) {
+        world.coins += source.coinOnKill;
+        world.stats.coinsEarned += source.coinOnKill;
+      }
+      if (source.shieldOnKill > 0 && source.shieldMax > 0) {
+        source.shield = Math.min(source.shieldMax, source.shield + source.shieldOnKill);
+      }
+      if (source.bossKillHeal > 0 && e.type === 'boss' && !source.dead) {
+        source.hp = Math.min(source.maxHp, source.hp + source.bossKillHeal);
+      }
+      if (source.bounty > 0 && (e.type === 'boss' || e.type === 'brute')) {
+        const bonus = Math.round((e.type === 'boss' ? 10 : 3) * (1 + source.bounty));
+        world.coins += bonus;
+        world.stats.coinsEarned += bonus;
+      }
+      if (source.explodeChance > 0 && !source._exploding && Math.random() < source.explodeChance) {
+        source._exploding = true;
+        const radius = source.explodeRadius || 120;
+        for (const o of Object.values(world.enemies)) {
+          if (!o.alive || o === e) continue;
+          const d = Math.hypot((o.x + o.w / 2) - (e.x + e.w / 2), (o.y + o.h / 2) - (e.y + e.h / 2));
+          if (d <= radius) damageEnemy(world, o, source.explodeDmg || 0, dir, source, 0, true);
+        }
+        burst(world, e.x + e.w / 2, e.y + e.h / 2, 24, '#ffb347', 1.3);
+        source._exploding = false;
+      }
     }
 
     const bigKill = e.type === 'boss' || e.type === 'brute';
@@ -690,9 +811,24 @@ function damageEnemy(world, e, dmg, dir, source, critBonus) {
   }
 }
 
-function damagePlayer(world, p, amount, dir, attacker) {
+function damagePlayer(world, p, amount, dir, attacker, kind) {
   if (p.dead || p.downed || p.invuln > 0) return;
-  let dmg = amount * (1 - Math.min(0.75, p.armor));
+  if (p.dodge > 0 && Math.random() < p.dodge) {
+    p.invuln = Math.max(p.invuln, 0.35);
+    burst(world, p.x + p.w / 2, p.y + p.h / 2, 8, '#d8c8ff', 0.6);
+    return;
+  }
+  let armor = Math.min(0.85, p.armor);
+  if (kind === 'contact' && p.contactArmor > 0) {
+    armor = 1 - (1 - armor) * (1 - p.contactArmor);
+  }
+  if (kind === 'projectile' && p.projArmor > 0) {
+    armor = 1 - (1 - armor) * (1 - p.projArmor);
+  }
+  if (p.lastStandArmor > 0 && p.maxHp > 0 && p.hp / p.maxHp <= 0.3) {
+    armor = 1 - (1 - armor) * (1 - p.lastStandArmor);
+  }
+  let dmg = amount * (1 - Math.min(0.85, armor));
   if (p.shield > 0 && dmg > 0) {
     const absorbed = Math.min(p.shield, dmg);
     p.shield -= absorbed;
@@ -707,8 +843,8 @@ function damagePlayer(world, p, amount, dir, attacker) {
     return;
   }
   p.hp -= dmg;
-  p.invuln = 0.9;
-  p.kb = (dir || 1) * 340;
+  p.invuln = 0.9 + (p.hitInvuln || 0);
+  p.kb = (dir || 1) * 340 * (1 - Math.min(0.8, p.kbResist || 0));
   p.vy = -280;
   p.regenT = 0;
   world.shake = 14;
@@ -811,6 +947,31 @@ function updateEnemies(world, dt) {
     e.anim += dt * (3 + Math.abs(e.vx) * 0.05);
     e.vy += GRAVITY * dt;
 
+    let slowFactor = 1;
+    if (e.slowT > 0) {
+      e.slowT = Math.max(0, e.slowT - dt);
+      slowFactor = 1 - Math.min(0.8, e.slowPower || 0);
+    }
+    if (e.vulnT > 0) e.vulnT = Math.max(0, e.vulnT - dt);
+
+    if (e.burnT > 0) {
+      e.burnT = Math.max(0, e.burnT - dt);
+      e.burnAcc = (e.burnAcc || 0) + dt;
+      if (e.burnAcc >= 0.25) {
+        e.burnAcc -= 0.25;
+        damageEnemy(world, e, (e.burnDps || 0) * 0.25, 1, e.burnSource || null, 0, true);
+      }
+    }
+    if (e.poisonT > 0) {
+      e.poisonT = Math.max(0, e.poisonT - dt);
+      e.poisonAcc = (e.poisonAcc || 0) + dt;
+      if (e.poisonAcc >= 0.3) {
+        e.poisonAcc -= 0.3;
+        damageEnemy(world, e, (e.poisonDps || 0) * 0.3, 1, e.poisonSource || null, 0, true);
+      }
+    }
+    if (!e.alive) continue;
+
     const kfr = 1700 * dt;
     if (Math.abs(e.kb) <= kfr) e.kb = 0;
     else e.kb -= Math.sign(e.kb) * kfr;
@@ -828,6 +989,7 @@ function updateEnemies(world, dt) {
     else if (e.type === 'boss') aiBoss(world, e, dt, target);
 
     if (!e.alive) continue;
+    if (slowFactor < 1) e.vx *= slowFactor;
     moveEntity(e, (e.vx + e.kb) * dt, e.vy * dt);
   }
 }
@@ -857,7 +1019,7 @@ function aiGrunt(world, e, dt, p) {
     else if (Math.abs(e.vx) < 20 && dist > 80 && Math.random() < 0.15) { e.vy = -780; e.jumpCd = 1.2; }
   }
   if (e.contactCd <= 0 && aabb(p, e)) {
-    damagePlayer(world, p, e.dmg, dir, e);
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
     e.contactCd = 0.9;
   }
 }
@@ -902,7 +1064,7 @@ function aiBrute(world, e, dt, p) {
       };
       burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 14, '#ff3030', 1);
       world.shake = Math.max(world.shake, 10);
-      if (aabb(hb, p)) damagePlayer(world, p, e.dmg, e.facing, e);
+      if (aabb(hb, p)) damagePlayer(world, p, e.dmg, e.facing, e, 'contact');
     }
   } else if (e.st === 'strike') {
     e.vx = 0;
@@ -992,7 +1154,7 @@ function aiBoss(world, e, dt, p) {
       world.hitStop = Math.max(world.hitStop, 0.08);
       for (const pl of Object.values(world.players)) {
         if (pl.dead || pl.downed) continue;
-        if (aabb(hb, pl)) damagePlayer(world, pl, e.dmg, dir, e);
+        if (aabb(hb, pl)) damagePlayer(world, pl, e.dmg, dir, e, 'contact');
       }
     }
   } else if (e.st === 'slamLand') {
@@ -1031,7 +1193,7 @@ function aiBoss(world, e, dt, p) {
     for (const pl of Object.values(world.players)) {
       if (pl.dead || pl.downed) continue;
       if (aabb(pl, e)) {
-        damagePlayer(world, pl, e.dmg * 0.6, dir, e);
+        damagePlayer(world, pl, e.dmg * 0.6, dir, e, 'contact');
         e.contactCd = 1.0;
         break;
       }
@@ -1117,7 +1279,7 @@ function updateProjectiles(world, dt) {
         if (t !== null && t < hitT) { hitT = t; hitP = p; }
       }
       if (hitP && hitT <= wallT + 1e-6) {
-        damagePlayer(world, hitP, 8, Math.sign(b.vx) || 1, b.source || null);
+        damagePlayer(world, hitP, 8, Math.sign(b.vx) || 1, b.source || null, 'projectile');
         dead = true;
       }
     }
@@ -1341,6 +1503,11 @@ function updateWaves(world, dt) {
     world.stats.coinsEarned += 12;
     for (const p of Object.values(world.players)) {
       if (!p.dead) p.hp = p.maxHp;
+      if (p.interest > 0 && world.coins > 0) {
+        const bonus = Math.round(world.coins * p.interest);
+        world.coins += bonus;
+        world.stats.coinsEarned += bonus;
+      }
     }
     world.score += 120 * world.wave;
     showBanner(world, 'ВОЛНА ПРОЙДЕНА', '', '#4affa0');
@@ -1369,8 +1536,10 @@ export function buyOffer(world, playerId, index) {
   const p = world.players[playerId];
   if (!p || p.dead) return false;
   const offer = p.shopOffers[index];
-  if (!offer || offer.purchased || world.coins < offer.cost) return false;
-  world.coins -= offer.cost;
+  if (!offer || offer.purchased) return false;
+  const price = offerPrice(p, offer);
+  if (world.coins < price) return false;
+  world.coins -= price;
   const mult = RARITY_MULT[offer.rarity] || 1;
   offer.upg.apply(p, mult);
   p.shopLevels[offer.upg.id] = (p.shopLevels[offer.upg.id] || 0) + 1;

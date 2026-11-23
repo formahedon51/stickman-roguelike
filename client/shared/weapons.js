@@ -98,3 +98,13 @@ export function addWeapon(p, id) {
   p.arsenal.push(id);
   return true;
 }
+
+export function getWeaponMod(p, id) {
+  if (!p.weaponMods) p.weaponMods = {};
+  let m = p.weaponMods[id];
+  if (!m) {
+    m = { damage: 0, cooldown: 0, range: 0, life: 0, crit: 0 };
+    p.weaponMods[id] = m;
+  }
+  return m;
+}

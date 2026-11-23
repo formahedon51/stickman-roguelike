@@ -1,6 +1,6 @@
-import { RARITY_LABEL, RARITY_COLOR } from '../shared/upgrades.js?v=20261123';
-import { CLASSES, CLASS_LIST } from '../shared/classes.js?v=20261123';
-import { getWeapon } from '../shared/weapons.js?v=20261123';
+import { RARITY_LABEL, RARITY_COLOR, offerPrice } from '../shared/upgrades.js?v=20261123b';
+import { CLASSES, CLASS_LIST } from '../shared/classes.js?v=20261123b';
+import { getWeapon } from '../shared/weapons.js?v=20261123b';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -261,13 +261,16 @@ export function createUI({
       card.querySelector('.sdesc').textContent = upg.desc || '';
       card.querySelector('.slevel').textContent = upg.unlockWeapon
         ? 'НОВОЕ ОРУЖИЕ'
-        : 'УР. ' + (o.level || 0) + '/' + (upg.max || 1);
+        : upg.max === Infinity
+          ? 'УР. ' + (o.level || 0) + ' · ∞'
+          : 'УР. ' + (o.level || 0) + '/' + (upg.max || 1);
+      const price = offerPrice(p, o);
       const cost = card.querySelector('.scost');
-      cost.textContent = '◆ ' + o.cost;
-      cost.classList.toggle('affordable', !o.purchased && (state.coins || 0) >= o.cost);
+      cost.textContent = '◆ ' + price;
+      cost.classList.toggle('affordable', !o.purchased && (state.coins || 0) >= price);
       const btn = card.querySelector('button');
       btn.textContent = o.purchased ? 'КУПЛЕНО' : '[' + (i + 1) + '] КУПИТЬ';
-      btn.disabled = o.purchased || (state.coins || 0) < o.cost || botMode;
+      btn.disabled = o.purchased || (state.coins || 0) < price || botMode;
     });
 
     if (botMode) {
@@ -372,6 +375,9 @@ export function createUI({
     if (e.code === 'Digit1' || e.code === 'Numpad1') onBuy(0);
     if (e.code === 'Digit2' || e.code === 'Numpad2') onBuy(1);
     if (e.code === 'Digit3' || e.code === 'Numpad3') onBuy(2);
+    if (e.code === 'Digit4' || e.code === 'Numpad4') onBuy(3);
+    if (e.code === 'Digit5' || e.code === 'Numpad5') onBuy(4);
+    if (e.code === 'Digit6' || e.code === 'Numpad6') onBuy(5);
   });
 
   return {

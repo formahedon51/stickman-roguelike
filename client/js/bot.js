@@ -1,8 +1,9 @@
 // Умный авто-бот: сам выбирает цель, оружие, уклоняется и покупает улучшения.
 // Не трогает DOM, поэтому его легко тестировать и прогонять на скорость.
 
-import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js?v=20261123';
-import { ARENA } from '../shared/constants.js?v=20261123';
+import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js?v=20261123b';
+import { ARENA } from '../shared/constants.js?v=20261123b';
+import { offerPrice } from '../shared/upgrades.js?v=20261123b';
 
 const centerX = (e) => e.x + e.w / 2;
 const centerY = (e) => e.y + e.h / 2;
@@ -37,6 +38,32 @@ const SHOP_SCORE = {
   critDmg: 58,
   retarget: 76,
   execute: 52,
+  inf_damage: 78,
+  inf_ranged: 74,
+  inf_melee: 68,
+  inf_fireRate: 76,
+  inf_attackRate: 68,
+  inf_multishot: 82,
+  inf_pierce: 68,
+  inf_hp: 70,
+  inf_regen: 58,
+  inf_armor: 64,
+  inf_crit: 66,
+  inf_critDmg: 62,
+  inf_retarget: 74,
+  inf_lifesteal: 62,
+  inf_shield: 64,
+  discount: 60,
+  luck: 56,
+  interest: 52,
+  ignite: 58,
+  firePower: 54,
+  venom: 56,
+  poisonPower: 52,
+  chain: 60,
+  chainPower: 56,
+  explodeChance: 54,
+  explodePower: 50,
   bossDmg: 57,
   lowHpDmg: 50,
   magnet: 46,
@@ -373,7 +400,7 @@ export function createBotBrain() {
     const picks = [];
     const offers = (p.shopOffers || [])
       .map((o, i) => ({ o, i }))
-      .filter(({ o }) => !o.purchased && world.coins >= o.cost);
+      .filter(({ o }) => !o.purchased && world.coins >= offerPrice(p, o));
     if (!offers.length) {
       mem.shopPicks = [];
       return picks;
@@ -386,7 +413,7 @@ export function createBotBrain() {
     offers.sort((a, b) => scoreOffer(b.o, p, hasRanged, hasMelee, lowHp) - scoreOffer(a.o, p, hasRanged, hasMelee, lowHp));
 
     for (const { o, i } of offers) {
-      if (picks.length >= 3) break;
+      if (picks.length >= 6) break;
       picks.push(i);
     }
     mem.shopPicks = picks;
@@ -404,6 +431,9 @@ export function createBotBrain() {
     }
     if (hasRanged && ['shootDmg', 'shootCd', 'multishot', 'pierce', 'bulletSize', 'shootSpd', 'retarget'].includes(u.id)) score += 8;
     if (hasMelee && ['melee', 'atkSpd', 'atkRange', 'lifesteal'].includes(u.id)) score += 6;
+    if (u.requiresWeapon) score += p.weapon === u.requiresWeapon ? 18 : 8;
+    if (u.requiresClass) score += 8;
+    if (u.infinite) score += 4;
     if (lowHp && ['hp', 'shield', 'armor', 'regenRate', 'regenFast', 'killHeal'].includes(u.id)) score += 22;
     return score - offer.cost * 0.35;
   }

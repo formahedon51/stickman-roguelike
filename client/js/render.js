@@ -1,6 +1,6 @@
 // Canvas-рендер состояния для Untitled X.
-import { ARENA, PLATFORMS } from '../shared/constants.js?v=20261123';
-import { getWeapon } from '../shared/weapons.js?v=20261123';
+import { ARENA, PLATFORMS } from '../shared/constants.js?v=20261123b';
+import { getWeapon } from '../shared/weapons.js?v=20261123b';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
