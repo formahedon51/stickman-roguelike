@@ -4,10 +4,10 @@ import {
   ARENA, SOLIDS, PLAYER, ENEMY_TYPES, GRAVITY, MAX_ACTIVE_ENEMIES,
   COMBO_TIME, REVIVE_RANGE, REVIVE_TIME, REVIVE_BLEEDOUT, REVIVE_HP_PCT,
   WAVE_TIME_LIMIT, MAX_PARTICLES, PLAYER_COLORS,
-} from './constants.js?v=20261123b';
-import { RARITY_MULT, rollOffers, offerPrice } from './upgrades.js?v=20261123b';
-import { applyClass } from './classes.js?v=20261123b';
-import { getWeapon, getWeaponMod } from './weapons.js?v=20261123b';
+} from './constants.js?v=20261123c';
+import { RARITY_MULT, rollOffers, offerPrice } from './upgrades.js?v=20261123c';
+import { applyClass } from './classes.js?v=20261123c';
+import { getWeapon, getWeaponMod } from './weapons.js?v=20261123c';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -667,6 +667,10 @@ function damageEnemy(world, e, dmg, dir, source, critBonus, silent) {
   if (!e.alive) return;
 
   if (e.vulnT > 0) dmg *= 1 + (e.vulnPower || 0);
+  if (e.type === 'shielder' && source) {
+    const toward = ((source.x + source.w / 2) - (e.x + e.w / 2)) * (e.facing || 1);
+    if (toward > -12) dmg *= 0.35;
+  }
   if (source && source.bossDmg > 0 && e.type === 'boss') dmg *= 1 + source.bossDmg;
   if (source && source.lowHpDmg > 0 && source.maxHp > 0 && source.hp / source.maxHp <= 0.35) {
     dmg *= 1 + source.lowHpDmg;
@@ -684,7 +688,7 @@ function damageEnemy(world, e, dmg, dir, source, critBonus, silent) {
     if (source.airDmg > 0 && !source.onGround) mult += source.airDmg;
     if (source.closeDmg > 0 && dist < 160) mult += source.closeDmg;
     if (source.farDmg > 0 && dist > 420) mult += source.farDmg;
-    if (source.eliteDmg > 0 && (e.type === 'boss' || e.type === 'brute')) mult += source.eliteDmg;
+    if (source.eliteDmg > 0 && (e.type === 'boss' || e.type === 'brute' || e.type === 'shielder' || e.type === 'splitter' || e.type === 'summoner')) mult += source.eliteDmg;
     if (source.stationaryDmg > 0 && Math.abs(source.vx) < 30) mult += source.stationaryDmg;
     if (source.movingDmg > 0 && Math.abs(source.vx) > 120) mult += source.movingDmg;
     if (source.dashBuffDmg > 0 && source.dashBuffT > 0) mult += source.dashBuffDmg;
@@ -802,11 +806,21 @@ function damageEnemy(world, e, dmg, dir, source, critBonus, silent) {
       }
     }
 
-    const bigKill = e.type === 'boss' || e.type === 'brute';
+    const bigKill = e.type === 'boss' || e.type === 'brute' || e.type === 'shielder' || e.type === 'splitter';
     world.shake = Math.max(world.shake, bigKill ? 15 : 9);
     world.hitStop = Math.max(world.hitStop, bigKill ? 0.08 : 0.05);
     burst(world, e.x + e.w / 2, e.y + e.h / 2, bigKill ? 40 : 20, e.color, bigKill ? 1.6 : 1.1);
     spawnDrops(world, e.x + e.w / 2, e.y + e.h / 2, e);
+    if (e.type === 'splitter' && !e._splitDone) {
+      e._splitDone = true;
+      const aliveNow = Object.values(world.enemies).filter((o) => o.alive).length;
+      const slots = Math.max(0, MAX_ACTIVE_ENEMIES - aliveNow);
+      for (let i = 0; i < Math.min(2, slots); i++) {
+        const sx = clamp(e.x + (i === 0 ? -28 : 28), ARENA.wall + 20, ARENA.w - 50);
+        createEnemy(world, { type: 'spawnling', x: sx, y: null });
+      }
+      burst(world, e.x + e.w / 2, e.y + e.h / 2, 20, '#8dff6b', 1.2);
+    }
     addDecal(world, e.x + e.w / 2, ARENA.floorY - 2, e.color);
   }
 }
@@ -898,7 +912,9 @@ function createEnemy(world, sp) {
     hpMult *= 1 + bossWave * 0.7;
     spdMult *= 1 + bossWave * 0.04;
   }
-  const y = (sp.y === null || sp.y === undefined) ? ARENA.floorY - T.h : sp.y;
+  const y = (sp.y === null || sp.y === undefined)
+    ? (T.flying ? ARENA.floorY - T.h - 210 : ARENA.floorY - T.h)
+    : sp.y;
   const e = {
     id: 'e' + world.nextId++,
     type: sp.type,
@@ -906,6 +922,7 @@ function createEnemy(world, sp) {
     w: T.w, h: T.h,
     vx: 0, vy: 0, kb: 0,
     onGround: false,
+    flying: !!T.flying,
     hp: T.hp * hpMult,
     maxHp: T.hp * hpMult,
     speed: T.speed * spdMult,
@@ -917,6 +934,9 @@ function createEnemy(world, sp) {
     hitFlash: 0,
     contactCd: 0,
     jumpCd: 0,
+    healCd: 1.5 + Math.random(),
+    summonCd: 2.5,
+    summonCount: 0,
     st: 'chase',
     t: 0,
     alive: true,
@@ -945,7 +965,7 @@ function updateEnemies(world, dt) {
     e.contactCd = Math.max(0, e.contactCd - dt);
     e.jumpCd = Math.max(0, e.jumpCd - dt);
     e.anim += dt * (3 + Math.abs(e.vx) * 0.05);
-    e.vy += GRAVITY * dt;
+    if (!e.flying) e.vy += GRAVITY * dt;
 
     let slowFactor = 1;
     if (e.slowT > 0) {
@@ -987,6 +1007,15 @@ function updateEnemies(world, dt) {
     else if (e.type === 'brute') aiBrute(world, e, dt, target);
     else if (e.type === 'thrower') aiThrower(world, e, dt, target);
     else if (e.type === 'boss') aiBoss(world, e, dt, target);
+    else if (e.type === 'runner') aiRunner(world, e, dt, target);
+    else if (e.type === 'shielder') aiShielder(world, e, dt, target);
+    else if (e.type === 'bomber') aiBomber(world, e, dt, target);
+    else if (e.type === 'flyer') aiFlyer(world, e, dt, target);
+    else if (e.type === 'healer') aiHealer(world, e, dt, target);
+    else if (e.type === 'sniper') aiSniper(world, e, dt, target);
+    else if (e.type === 'summoner') aiSummoner(world, e, dt, target);
+    else if (e.type === 'splitter') aiSplitter(world, e, dt, target);
+    else if (e.type === 'spawnling') aiSpawnling(world, e, dt, target);
 
     if (!e.alive) continue;
     if (slowFactor < 1) e.vx *= slowFactor;
@@ -1112,6 +1141,250 @@ function aiThrower(world, e, dt, p) {
       source: e,
     });
     burst(world, ex, ey, 5, '#ff8a6a', 0.5);
+  }
+}
+
+function aiRunner(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+
+  if (e.onGround && e.jumpCd <= 0) {
+    if (p.y + p.h < e.y - 35 && dist < 200) {
+      e.vy = -790;
+      e.jumpCd = 0.9;
+    } else if (Math.random() < 0.025) {
+      e.vy = -740;
+      e.jumpCd = 1.1;
+    }
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.8;
+  }
+}
+
+function aiShielder(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dist > 48 ? dir * e.speed : 0;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 45 && dist < 220) {
+    e.vy = -760;
+    e.jumpCd = 1.3;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.15;
+  }
+}
+
+function explodeBomber(world, e) {
+  const radius = 105;
+  const ex = e.x + e.w / 2;
+  const ey = e.y + e.h / 2;
+  burst(world, ex, ey, 38, '#ffb347', 1.8);
+  world.shake = Math.max(world.shake, 18);
+  world.hitStop = Math.max(world.hitStop, 0.08);
+  for (const pl of Object.values(world.players)) {
+    if (pl.dead || pl.downed) continue;
+    if (Math.hypot(pl.x + pl.w / 2 - ex, pl.y + pl.h / 2 - ey) <= radius + pl.w / 2) {
+      damagePlayer(world, pl, e.dmg, Math.sign(pl.x - e.x) || 1, e, 'contact');
+    }
+  }
+  damageEnemy(world, e, e.hp + 9999, 1, null, 0, true);
+}
+
+function aiBomber(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+
+  if (e.st === 'fuse') {
+    e.vx = 0;
+    e.t -= dt;
+    if (e.t <= 0) explodeBomber(world, e);
+    return;
+  }
+
+  e.vx = dir * e.speed;
+  if (dist < 115 || e.hp < e.maxHp * 0.35) {
+    e.st = 'fuse';
+    e.t = 0.9;
+    e.vx = 0;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 12, '#ffb347', 0.9);
+  }
+}
+
+function aiFlyer(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.t -= dt;
+
+  if (e.st === 'dive') {
+    if (e.t <= 0) { e.st = 'chase'; e.t = 1.1; }
+  } else if (e.t <= 0 && Math.abs(dx) < 230) {
+    e.st = 'dive';
+    e.t = 0.55;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 8, '#d8c8ff', 0.6);
+  }
+
+  const hoverY = Math.max(120, p.y - 90 + Math.sin(e.anim * 0.8) * 34);
+  e.vx = dir * e.speed * (e.st === 'dive' ? 1.35 : 0.9);
+  if (e.st === 'dive') {
+    e.vy = Math.max(e.vy, 320);
+  } else {
+    e.vy = clamp((hoverY - e.y) * 2.8, -220, 220);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.9;
+  }
+}
+
+function aiHealer(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  if (dist < 220) e.vx = -dir * e.speed;
+  else if (dist > 430) e.vx = dir * e.speed;
+  else e.vx = 0;
+
+  e.healCd -= dt;
+  if (e.healCd <= 0) {
+    let healed = 0;
+    for (const o of Object.values(world.enemies)) {
+      if (o === e || !o.alive) continue;
+      const d = Math.hypot(
+        (o.x + o.w / 2) - (e.x + e.w / 2),
+        (o.y + o.h / 2) - (e.y + e.h / 2),
+      );
+      if (d < 380 && o.hp < o.maxHp) {
+        o.hp = Math.min(o.maxHp, o.hp + o.maxHp * 0.18 + 10);
+        burst(world, o.x + o.w / 2, o.y + o.h / 2, 5, '#4affa0', 0.5);
+        healed++;
+      }
+    }
+    e.healCd = healed > 0 ? 3.8 : 1.5;
+    if (healed > 0) burst(world, e.x + e.w / 2, e.y + e.h / 2, 10, '#4affa0', 0.8);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.2;
+  }
+}
+
+function aiSniper(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.t -= dt;
+
+  if (dist < 250) e.vx = -dir * e.speed;
+  else if (dist > 620) e.vx = dir * e.speed * 0.8;
+  else e.vx = 0;
+
+  if (e.st === 'aim') {
+    e.vx = 0;
+    if (e.t <= 0) {
+      const ex = e.x + e.w / 2;
+      const ey = e.y + e.h * 0.4;
+      const flight = Math.min(1.1, dist / 900);
+      const px = pcx + p.vx * flight * 0.8;
+      const py = p.y + p.h / 2 + p.vy * flight * 0.5;
+      const ang = Math.atan2(py - ey, px - ex);
+      spawnProjectile(world, {
+        x: ex, y: ey,
+        vx: Math.cos(ang) * 900,
+        vy: Math.sin(ang) * 900,
+        r: 4, life: 2.2,
+        friendly: false,
+        damage: 10,
+        source: e,
+        color: '#7fe7ff',
+        kind: 'sniper',
+      });
+      burst(world, ex, ey, 6, '#7fe7ff', 0.6);
+      e.st = 'chase';
+      e.t = 2.2;
+    }
+  } else if (e.t <= 0 && dist < 820) {
+    e.st = 'aim';
+    e.t = 0.55;
+    e.vx = 0;
+  }
+}
+
+function aiSummoner(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  if (dist < 270) e.vx = -dir * e.speed;
+  else if (dist > 470) e.vx = dir * e.speed;
+  else e.vx = 0;
+
+  e.summonCd -= dt;
+  const alive = Object.values(world.enemies).filter((o) => o.alive).length;
+  if (e.summonCd <= 0 && e.summonCount < 4 && alive < MAX_ACTIVE_ENEMIES - 1) {
+    const sx = clamp(e.x + (Math.random() < 0.5 ? -55 : 55), ARENA.wall + 30, ARENA.w - 50);
+    createEnemy(world, { type: 'spawnling', x: sx, y: null });
+    e.summonCount += 1;
+    e.summonCd = 6.5;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 14, '#c4a7ff', 0.9);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.2;
+  }
+}
+
+function aiSplitter(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 45) {
+    e.vy = -760;
+    e.jumpCd = 1.4;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.1;
+  }
+}
+
+function aiSpawnling(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 30 && dist < 160) {
+    e.vy = -720;
+    e.jumpCd = 1.0;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.75;
   }
 }
 
@@ -1279,7 +1552,7 @@ function updateProjectiles(world, dt) {
         if (t !== null && t < hitT) { hitT = t; hitP = p; }
       }
       if (hitP && hitT <= wallT + 1e-6) {
-        damagePlayer(world, hitP, 8, Math.sign(b.vx) || 1, b.source || null, 'projectile');
+        damagePlayer(world, hitP, b.damage || 8, Math.sign(b.vx) || 1, b.source || null, 'projectile');
         dead = true;
       }
     }
@@ -1297,8 +1570,25 @@ function updateProjectiles(world, dt) {
 /* Дроп и опыт                                                         */
 /* ------------------------------------------------------------------ */
 
+const DROP_TABLE = {
+  boss: { coins: 20, xp: 120, orbs: 8 },
+  brute: { coins: 5, xp: 24, orbs: 3 },
+  shielder: { coins: 5, xp: 22, orbs: 2 },
+  summoner: { coins: 6, xp: 26, orbs: 3 },
+  splitter: { coins: 5, xp: 18, orbs: 2 },
+  healer: { coins: 4, xp: 16, orbs: 2 },
+  sniper: { coins: 3, xp: 12, orbs: 1 },
+  thrower: { coins: 3, xp: 12, orbs: 1 },
+  bomber: { coins: 3, xp: 10, orbs: 1 },
+  flyer: { coins: 2, xp: 9, orbs: 1 },
+  runner: { coins: 2, xp: 7, orbs: 1 },
+  grunt: { coins: 2, xp: 7, orbs: 1 },
+  spawnling: { coins: 1, xp: 4, orbs: 1 },
+};
+
 function spawnDrops(world, x, y, enemy) {
-  const coinCount = enemy.type === 'boss' ? 20 : enemy.type === 'brute' ? 5 : enemy.type === 'thrower' ? 3 : 2;
+  const drop = DROP_TABLE[enemy.type] || DROP_TABLE.grunt;
+  const coinCount = drop.coins;
   for (let i = 0; i < coinCount; i++) {
     world.pickups.push({
       id: 'k' + world.nextId++,
@@ -1313,8 +1603,8 @@ function spawnDrops(world, x, y, enemy) {
     });
   }
   const xpMult = 1 + world.wave * 0.04;
-  const xpVal = (enemy.type === 'boss' ? 120 : enemy.type === 'brute' ? 24 : enemy.type === 'thrower' ? 12 : 7) * xpMult;
-  const orbCount = enemy.type === 'boss' ? 8 : enemy.type === 'brute' ? 3 : 1;
+  const xpVal = drop.xp * xpMult;
+  const orbCount = drop.orbs;
   for (let i = 0; i < orbCount; i++) {
     world.pickups.push({
       id: 'k' + world.nextId++,
@@ -1421,14 +1711,17 @@ function spawnWave(world, n) {
   const list = [];
   if (n > 0 && n % 5 === 0) {
     list.push('boss');
-    const minions = Math.min(1 + Math.floor(n / 5), 5);
+    const minions = Math.min(1 + Math.floor(n / 5), 4);
     for (let i = 0; i < minions; i++) list.push('grunt');
+    if (n >= 10) list.push('flyer');
+    if (n >= 15) list.push('sniper');
+    if (n >= 20) list.push('healer');
   } else {
     const solo = !!world.solo;
     const extra = Math.max(0, (world.playerCount || 1) - 2);
     const grunts = Math.min(
       (solo ? 1 : 2) + Math.floor(n * (solo ? 0.7 : 0.9)) + (solo ? 0 : extra),
-      solo ? 7 : 12,
+      solo ? 6 : 12,
     );
     const brutes = n >= 3
       ? Math.min(Math.floor((n - 1) * 0.5) + (solo ? 0 : extra), solo ? 2 : 4)
@@ -1436,9 +1729,26 @@ function spawnWave(world, n) {
     const throwers = n >= 3
       ? Math.min(Math.floor(n / 4) + 1 + (solo ? 0 : Math.floor(extra / 2)), solo ? 1 : 3)
       : 0;
+    const runners = n >= 2 ? Math.min(1 + Math.floor((n - 2) / 5), 2) : 0;
+    const shielders = n >= 4 ? Math.min(1 + Math.floor((n - 4) / 8), 1) : 0;
+    const flyers = n >= 5 ? Math.min(1 + Math.floor((n - 5) / 7), 2) : 0;
+    const bombers = n >= 6 ? Math.min(1 + Math.floor((n - 6) / 9), 2) : 0;
+    const healers = n >= 7 ? Math.min(1 + Math.floor((n - 7) / 10), 1) : 0;
+    const snipers = n >= 8 ? Math.min(1 + Math.floor((n - 8) / 10), 1) : 0;
+    const summoners = n >= 9 ? Math.min(1 + Math.floor((n - 9) / 12), 1) : 0;
+    const splitters = n >= 10 ? Math.min(1 + Math.floor((n - 10) / 12), 1) : 0;
+
     for (let i = 0; i < grunts; i++) list.push('grunt');
     for (let i = 0; i < brutes; i++) list.push('brute');
     for (let i = 0; i < throwers; i++) list.push('thrower');
+    for (let i = 0; i < runners; i++) list.push('runner');
+    for (let i = 0; i < shielders; i++) list.push('shielder');
+    for (let i = 0; i < flyers; i++) list.push('flyer');
+    for (let i = 0; i < bombers; i++) list.push('bomber');
+    for (let i = 0; i < healers; i++) list.push('healer');
+    for (let i = 0; i < snipers; i++) list.push('sniper');
+    for (let i = 0; i < summoners; i++) list.push('summoner');
+    for (let i = 0; i < splitters; i++) list.push('splitter');
   }
 
   for (let i = list.length - 1; i > 0; i--) {

@@ -2,9 +2,9 @@
 
 import {
   createWorld, resetWorld, step, buyOffer, setReady,
-} from '../shared/sim.js?v=20261123b';
-import { PLAYER_COLORS, TICK_RATE } from '../shared/constants.js?v=20261123b';
-import { createBotBrain } from './bot.js?v=20261123b';
+} from '../shared/sim.js?v=20261123c';
+import { PLAYER_COLORS, TICK_RATE } from '../shared/constants.js?v=20261123c';
+import { createBotBrain } from './bot.js?v=20261123c';
 
 const emptyInput = () => ({
   left: false, right: false, jump: false, dash: false, attack: false, swap: false,

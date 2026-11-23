@@ -1,6 +1,6 @@
 // Магазинные улучшения, редкости и разблокировка оружия.
 
-import { addWeapon, getWeapon, getWeaponMod } from './weapons.js?v=20261123b';
+import { addWeapon, getWeapon, getWeaponMod } from './weapons.js?v=20261123c';
 
 export const RARITY_COLOR = {
   common: '#aaaaaa',
@@ -89,7 +89,7 @@ export const UPGRADE_POOL = [
   { id: 'swapSpeed', name: 'Быстрая смена', desc: 'Меньше задержка смены оружия', base: 8, step: 6, max: 4, apply(p, m) { p.swapCdMax = Math.max(0.08, p.swapCdMax - 0.06 * m); } },
 
   // ---- разблокировка оружия ----
-  { id: 'unlock_pistol', name: 'Пистолет', desc: 'Добавить оружие в арсенал', base: 20, step: 0, max: 1, unlockWeapon: 'pistol', apply(p) { addWeapon(p, 'pistol'); } },
+  { id: 'unlock_pistol', name: 'Пистолет', desc: 'Добавить оружие в арсенал', base: 14, step: 0, max: 1, unlockWeapon: 'pistol', apply(p) { addWeapon(p, 'pistol'); } },
   { id: 'unlock_axe', name: 'Топор', desc: 'Добавить оружие в арсенал', base: 22, step: 0, max: 1, unlockWeapon: 'axe', apply(p) { addWeapon(p, 'axe'); } },
   { id: 'unlock_dagger', name: 'Кинжал', desc: 'Добавить оружие в арсенал', base: 18, step: 0, max: 1, unlockWeapon: 'dagger', apply(p) { addWeapon(p, 'dagger'); } },
   { id: 'unlock_shotgun', name: 'Дробовик', desc: 'Добавить оружие в арсенал', base: 24, step: 0, max: 1, unlockWeapon: 'shotgun', apply(p) { addWeapon(p, 'shotgun'); } },

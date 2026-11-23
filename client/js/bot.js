@@ -1,9 +1,9 @@
 // Умный авто-бот: сам выбирает цель, оружие, уклоняется и покупает улучшения.
 // Не трогает DOM, поэтому его легко тестировать и прогонять на скорость.
 
-import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js?v=20261123b';
-import { ARENA } from '../shared/constants.js?v=20261123b';
-import { offerPrice } from '../shared/upgrades.js?v=20261123b';
+import { WEAPONS, getWeapon, weaponReach } from '../shared/weapons.js?v=20261123c';
+import { ARENA } from '../shared/constants.js?v=20261123c';
+import { offerPrice } from '../shared/upgrades.js?v=20261123c';
 
 const centerX = (e) => e.x + e.w / 2;
 const centerY = (e) => e.y + e.h / 2;
@@ -178,8 +178,16 @@ export function createBotBrain() {
       const dx = centerX(e) - centerX(p);
       const dy = centerY(e) - centerY(p);
       let score = Math.hypot(dx, dy);
-      if (e.type === 'thrower') score -= 150;
-      if (e.type === 'brute') score -= 70;
+      if (e.type === 'healer') score -= 230;
+      else if (e.type === 'summoner') score -= 210;
+      else if (e.type === 'sniper') score -= 175;
+      else if (e.type === 'thrower') score -= 150;
+      else if (e.type === 'bomber') score -= 125;
+      else if (e.type === 'flyer') score -= 80;
+      else if (e.type === 'runner' || e.type === 'spawnling') score -= 35;
+      else if (e.type === 'brute') score -= 70;
+      else if (e.type === 'shielder') score += 70;
+      else if (e.type === 'splitter') score += 10;
       if (e.type === 'boss') {
         if (nearMinions) score -= 20;
         else score -= ranged ? 230 : 90;
@@ -224,6 +232,17 @@ export function createBotBrain() {
         danger = dx > 0 ? -1 : 1;
         dash = true;
         jump = true;
+        break;
+      }
+      if (e.type === 'bomber' && e.st === 'fuse' && Math.abs(dx) < 165) {
+        danger = dx > 0 ? -1 : 1;
+        dash = true;
+        jump = true;
+        break;
+      }
+      if (e.type === 'flyer' && e.st === 'dive' && Math.abs(dx) < 120) {
+        danger = dx > 0 ? -1 : 1;
+        dash = true;
         break;
       }
       if (e.type === 'boss' && Math.abs(dx) < 240 && bossDanger(e, p)) {
@@ -317,8 +336,12 @@ export function createBotBrain() {
     const angry = isBoss && bossDanger(target, p);
     const lowHp = p.hp / p.maxHp < 0.42;
     const nearThreat = dist < 320;
-    const forceRanged = (lowHp || isBoss || target.type === 'brute') && hasRangedWeapon(p);
-    const retreat = ((isBoss && angry && dist < 390) || (lowHp && nearThreat && dist < 330));
+    const crowd = enemies.filter((e) => Math.hypot(centerX(e) - centerX(p), centerY(e) - centerY(p)) < 190).length >= 3;
+    const hasRanged = hasRangedWeapon(p);
+    const forceRanged = (lowHp || isBoss || target.type === 'brute' || crowd) && hasRanged;
+    const retreat = (isBoss && angry && dist < 390) ||
+      (lowHp && nearThreat && dist < 330) ||
+      (crowd && ((hasRanged && p.hp / p.maxHp < 0.75) || (!hasRanged && lowHp)) && dist < 330);
 
     const desired = chooseWeapon(p, dist, vertical, forceRanged);
     if (desired && desired !== p.weapon && p.switchCd <= 0 && mem.swapT <= 0) {

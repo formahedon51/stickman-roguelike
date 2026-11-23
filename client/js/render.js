@@ -1,6 +1,6 @@
 // Canvas-рендер состояния для Untitled X.
-import { ARENA, PLATFORMS } from '../shared/constants.js?v=20261123b';
-import { getWeapon } from '../shared/weapons.js?v=20261123b';
+import { ARENA, PLATFORMS } from '../shared/constants.js?v=20261123c';
+import { getWeapon } from '../shared/weapons.js?v=20261123c';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -378,6 +378,59 @@ export function createRenderer(canvas) {
     if (e.type === 'boss' && e.enrage) color = '#ff4040';
 
     drawShadow(x + w / 2, y + h, w * 1.6, 0.32 * (e.onGround === false ? 0.5 : 1));
+
+    if (e.type === 'flyer') {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = '#d8c8ff';
+      ctx.lineWidth = 2;
+      const cx = x + w / 2;
+      const cy = y + h * 0.45;
+      const flap = Math.sin(now * 12 + x * 0.03) * 5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx - w * 0.9, cy - 10 + flap);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + w * 0.9, cy - 10 - flap);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (e.type === 'summoner' || e.type === 'healer' || e.type === 'splitter') {
+      ctx.save();
+      ctx.globalAlpha = e.type === 'healer' ? 0.2 : 0.16;
+      ctx.fillStyle = e.color || '#c4a7ff';
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2, y + h * 0.55, w * 1.1, h * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (e.type === 'shielder') {
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = e.color || '#5eead4';
+      ctx.lineWidth = 4;
+      const cx = x + w / 2;
+      const cy = y + h * 0.5;
+      ctx.beginPath();
+      if ((e.facing || 1) > 0) ctx.arc(cx, cy, w * 0.9, -Math.PI / 2, Math.PI / 2);
+      else ctx.arc(cx, cy, w * 0.9, Math.PI / 2, Math.PI * 1.5);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (e.type === 'bomber' && e.st === 'fuse') {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.35 * Math.sin(now * 22);
+      ctx.strokeStyle = '#ffb347';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x + w / 2, y + h / 2, h * 0.65 + 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     if (e.type === 'boss') {
       ctx.save();
       ctx.globalAlpha = e.enrage ? 0.35 : 0.2;
@@ -392,22 +445,45 @@ export function createRenderer(canvas) {
     if (e.type === 'boss') weapon = 'axe';
     else if (e.type === 'brute') weapon = 'sword';
     else if (e.type === 'thrower') weapon = 'pistol';
+    else if (e.type === 'shielder') weapon = 'sword';
+    else if (e.type === 'sniper') weapon = 'rifle';
+    else if (e.type === 'summoner') weapon = 'staff';
 
     let attackT = 0;
     if (e.type === 'boss' && e.st === 'slamWindup') attackT = 0.7;
     else if (e.type === 'boss' && e.st === 'slamLand') attackT = clamp((e.t || 0) / 0.4, 0, 1);
     else if (e.type === 'brute' && e.st === 'windup') attackT = 0.7;
     else if (e.type === 'brute' && e.st === 'strike') attackT = clamp((e.t || 0) / 0.16, 0, 1);
+    else if (e.type === 'sniper' && e.st === 'aim') attackT = 0.65;
+    else if (e.type === 'bomber' && e.st === 'fuse') attackT = 0.8;
+    else if (e.type === 'flyer' && e.st === 'dive') attackT = 0.7;
 
     drawStickman(x + w / 2, y + h, h, color, {
       facing: e.facing || 1,
       phase: now * 3.5 + x * 0.02,
       weapon,
-      glow: e.type === 'boss' ? 16 : 0,
+      glow: e.type === 'boss' ? 16
+        : e.type === 'healer' || e.type === 'summoner' ? 10
+        : e.type === 'flyer' || e.type === 'splitter' ? 7 : 0,
       scarf: e.type === 'boss',
       airborne: e.onGround === false,
       attackT,
     });
+
+    if (e.type === 'healer') {
+      ctx.save();
+      ctx.strokeStyle = '#4affa0';
+      ctx.lineWidth = 2.5;
+      const cx = x + w / 2;
+      const cy = y - 12;
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy);
+      ctx.lineTo(cx + 5, cy);
+      ctx.moveTo(cx, cy - 5);
+      ctx.lineTo(cx, cy + 5);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     if (e.type !== 'boss' && e.hp < e.maxHp) {
       drawHpBar(x + w / 2 - (w + 10) / 2, y - 10, w + 10, 4, e.hp / e.maxHp, '#ff5050');

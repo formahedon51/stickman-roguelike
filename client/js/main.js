@@ -1,9 +1,9 @@
-import { createRenderer } from './render.js?v=20261123b';
-import { createInput } from './input.js?v=20261123b';
-import { createUI } from './ui.js?v=20261123b';
-import { createDemo } from './demo.js?v=20261123b';
-import { createAudio } from './audio.js?v=20261123b';
-import { getWeapon } from '../shared/weapons.js?v=20261123b';
+import { createRenderer } from './render.js?v=20261123c';
+import { createInput } from './input.js?v=20261123c';
+import { createUI } from './ui.js?v=20261123c';
+import { createDemo } from './demo.js?v=20261123c';
+import { createAudio } from './audio.js?v=20261123c';
+import { getWeapon } from '../shared/weapons.js?v=20261123c';
 
 const canvas = document.getElementById('game');
 const renderer = createRenderer(canvas);
