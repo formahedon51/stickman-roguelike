@@ -37,6 +37,7 @@ const SFX = {
   dash: () => tone(600, 0.13, 'sawtooth', 0.045, 200),
   attack: () => tone(200, 0.08, 'square', 0.04, 100),
   shoot: () => tone(800, 0.08, 'sine', 0.035, 600),
+  swap: () => tone(420, 0.07, 'triangle', 0.03, 760),
   hurt: () => tone(120, 0.22, 'sawtooth', 0.09, 60),
   downed: () => tone(80, 0.5, 'sine', 0.1, 40),
   revive: () => tone(500, 0.25, 'sine', 0.05, 800),

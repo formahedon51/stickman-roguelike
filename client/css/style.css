@@ -67,6 +67,60 @@ h1 span { color: #4affa0; text-shadow: 0 0 26px rgba(74, 255, 160, .5); }
   line-height: 1.6;
 }
 
+/* ---------- class picker ---------- */
+
+.class-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+.class-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: #cfe6ff;
+  background: rgba(10, 18, 26, .65);
+  border: 1px solid rgba(120, 150, 180, .28);
+  transition: .18s;
+}
+.class-card:hover {
+  background: rgba(74, 163, 255, .12);
+  border-color: rgba(140, 180, 220, .6);
+  box-shadow: none;
+}
+.class-card.selected {
+  border-color: var(--cls-color, #4aa3ff);
+  background: rgba(74, 163, 255, .14);
+  box-shadow: 0 0 16px -2px var(--cls-color, #4aa3ff);
+}
+.class-card .cc-icon {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--cls-color, #8fd0ff);
+  text-shadow: 0 0 12px currentColor;
+}
+.class-card .cc-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.class-card .cc-desc {
+  font-size: 9px;
+  line-height: 1.35;
+  opacity: .62;
+  min-height: 24px;
+}
+
+.lobby-class { margin-left: auto; font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
+
 .fields {
   display: flex;
   gap: 16px;
@@ -238,6 +292,14 @@ button.alt:hover {
 
 #centerHud { text-align: center; padding-top: 2px; }
 #waveLbl { font-size: 13px; letter-spacing: 3px; opacity: .85; }
+#weaponLbl {
+  font-size: 11px;
+  letter-spacing: 2px;
+  min-height: 14px;
+  color: #ffd54f;
+  opacity: .95;
+  text-shadow: 0 0 10px rgba(0, 0, 0, .9);
+}
 #enemyLbl {
   font-size: 10px;
   letter-spacing: 2px;
@@ -580,8 +642,8 @@ button.alt:hover {
 .tc-jump:active, .tc-jump.pressed { background: rgba(74, 255, 160, .4); }
 .tc-atk { border-color: rgba(255, 120, 120, .55); color: #ffd0d0; }
 .tc-atk:active, .tc-atk.pressed { background: rgba(255, 80, 80, .35); }
-.tc-shoot { border-color: rgba(180, 150, 255, .55); color: #e0d0ff; }
-.tc-shoot:active, .tc-shoot.pressed { background: rgba(160, 130, 255, .35); }
+.tc-swap { border-color: rgba(120, 190, 255, .55); color: #d0eaff; }
+.tc-swap:active, .tc-swap.pressed { background: rgba(90, 160, 255, .35); }
 .tc-dash { border-color: rgba(255, 220, 120, .55); color: #fff0c0; }
 .tc-dash:active, .tc-dash.pressed { background: rgba(255, 200, 80, .35); }
 
@@ -589,6 +651,8 @@ button.alt:hover {
 
 @media (max-width: 640px) {
   h1 { letter-spacing: 4px; }
+  .class-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .class-card .cc-desc { min-height: 0; }
   .fields { flex-direction: column; }
   .fields label { min-width: 0; }
   #playersHud { max-width: 48vw; }

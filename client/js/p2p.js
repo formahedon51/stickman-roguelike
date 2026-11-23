@@ -32,7 +32,7 @@ const SNAPSHOT_RATE = 15; // снапшотов в секунду
 const CONNECT_TIMEOUT = 8000;
 
 const emptyInput = () => ({
-  left: false, right: false, jump: false, dash: false, attack: false, shoot: false,
+  left: false, right: false, jump: false, dash: false, attack: false, swap: false,
 });
 
 function genCode() {
@@ -88,7 +88,8 @@ function plainPlayer(p) {
     dead: p.dead, downed: p.downed,
     downedTimer: p.downedTimer || 0, reviveProgress: p.reviveProgress || 0,
     attackT: p.attackT || 0, shootT: p.shootT || 0, dashT: p.dashT || 0,
-    weapon: p.weapon || 'sword',
+    weapon: p.weapon || 'sword', clazz: p.clazz || 'warrior',
+    switchCd: p.switchCd || 0,
     kills: p.kills || 0, score: p.score || 0,
     ready: !!p.ready,
     shopLevels: p.shopLevels ? { ...p.shopLevels } : {},
@@ -157,10 +158,11 @@ function snapWorld(world) {
 /* ------------------------------------------------------------------ */
 
 export function createP2PHost({
-  name, onLobby, onState, onGameOver, onStarted, onError, onEnd,
+  name, clazz, onLobby, onState, onGameOver, onStarted, onError, onEnd,
 }) {
   const hostId = 'host';
   const hostName = name || 'Хост';
+  const hostClass = clazz || 'warrior';
   const servers = getSignalingServers();
   const guests = new Map();
   const inputs = {};
@@ -176,8 +178,10 @@ export function createP2PHost({
   let snapTimer = null;
 
   function playersList() {
-    const list = [{ id: hostId, name: hostName, host: true, color: PLAYER_COLORS[0] }];
-    for (const g of guests.values()) list.push({ id: g.id, name: g.name, host: false, color: g.color });
+    const list = [{ id: hostId, name: hostName, host: true, color: PLAYER_COLORS[0], clazz: hostClass }];
+    for (const g of guests.values()) {
+      list.push({ id: g.id, name: g.name, host: false, color: g.color, clazz: g.clazz });
+    }
     return list;
   }
 
@@ -212,11 +216,15 @@ export function createP2PHost({
         clearTimeout(helloTimer);
         const id = conn.peer;
         const color = PLAYER_COLORS[(guests.size + 1) % PLAYER_COLORS.length];
-        info = { id, name: msg.name || 'Гость', color, conn };
+        info = { id, name: msg.name || 'Гость', color, clazz: msg.clazz || 'warrior', conn };
         guests.set(id, info);
 
         if (started && world && !world.players[id]) {
-          world.players[id] = makePlayer({ id, name: info.name, color }, Object.keys(world.players).length, false);
+          world.players[id] = makePlayer(
+            { id, name: info.name, color, clazz: info.clazz },
+            Object.keys(world.players).length,
+            false,
+          );
           world.playerCount = Object.keys(world.players).length;
           if (world.status === 'shop') {
             world.players[id].shopOffers = rollOffers(world.wave, {});
@@ -314,7 +322,7 @@ export function createP2PHost({
   }
 
   function beginRun() {
-    const defs = playersList().map((p) => ({ id: p.id, name: p.name, color: p.color }));
+    const defs = playersList().map((p) => ({ id: p.id, name: p.name, color: p.color, clazz: p.clazz }));
     world = createWorld(defs, { solo: false });
     started = true;
     reported = false;
@@ -375,9 +383,10 @@ export function createP2PHost({
 /* ------------------------------------------------------------------ */
 
 export function createP2PGuest({
-  code, name, onLobby, onState, onStarted, onError, onEnd,
+  code, name, clazz, onLobby, onState, onStarted, onError, onEnd,
 }) {
   const roomCode = String(code || '').trim().toUpperCase();
+  const guestClass = clazz || 'warrior';
   const servers = getSignalingServers();
   let peer = null;
   let conn = null;
@@ -415,7 +424,7 @@ export function createP2PGuest({
       conn = c;
 
       c.on('open', () => {
-        sendTo(c, { t: 'hello', name: name || 'Гость' });
+        sendTo(c, { t: 'hello', name: name || 'Гость', clazz: guestClass });
       });
 
       clearTimeout(p2pTimer);

@@ -16,6 +16,7 @@ let selfId = null;
 let active = false;
 let inputTimer = null;
 let paused = false;
+let lastInput = null;
 
 const ui = createUI({
   onSolo: startSolo,
@@ -60,12 +61,17 @@ function begin(adapter) {
   let prevInput = input.snapshot();
   inputTimer = setInterval(() => {
     const cur = input.snapshot();
+    lastInput = cur;
     if (active && session && session.sessionId) session.sendInput(cur);
     if (active) {
+      const me = state && state.players && state.players[session && session.sessionId];
       if (cur.jump && !prevInput.jump) audio.sfx.jump();
       if (cur.dash && !prevInput.dash) audio.sfx.dash();
-      if (cur.attack && !prevInput.attack) audio.sfx.attack();
-      if (cur.shoot && !prevInput.shoot) audio.sfx.shoot();
+      if (cur.attack && !prevInput.attack) {
+        if (me && me.weapon === 'gun') audio.sfx.shoot();
+        else audio.sfx.attack();
+      }
+      if (cur.swap && !prevInput.swap) audio.sfx.swap();
     }
     prevInput = cur;
   }, 1000 / 30);
@@ -75,6 +81,7 @@ function startLocal(solo) {
   if (session) leaveSession();
   const adapter = createDemo({
     name: ui.getName(),
+    clazz: ui.getClass(),
     solo,
     onState: (s) => { state = s; },
     onGameOver: (stats) => ui.showGameOver(stats),
@@ -102,6 +109,7 @@ function createRoom() {
   if (session) leaveSession();
   const adapter = createP2PHost({
     name: ui.getName(),
+    clazz: ui.getClass(),
     onLobby: (data) => {
       if (data.started) ui.hideLobby();
       else ui.showLobby(data);
@@ -130,6 +138,7 @@ function joinRoom() {
   const adapter = createP2PGuest({
     code,
     name: ui.getName(),
+    clazz: ui.getClass(),
     onLobby: (data) => {
       if (data.started) ui.hideLobby();
       else ui.showLobby(data);
@@ -254,4 +263,6 @@ window.__RG_DEBUG__ = {
   getSession: () => session,
   getSelfId: () => selfId,
   setState: (s) => { state = s; },
+  getInput: () => input.snapshot(),
+  getLastInput: () => lastInput,
 };

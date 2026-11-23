@@ -7,6 +7,7 @@ import {
   WAVE_TIME_LIMIT, MAX_PARTICLES, PLAYER_COLORS,
 } from './constants.js';
 import { RARITY_MULT, rollOffers } from './upgrades.js';
+import { applyClass } from './classes.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -14,7 +15,7 @@ const aabb = (a, b) =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
 const emptyInput = () => ({
-  left: false, right: false, jump: false, dash: false, attack: false, shoot: false,
+  left: false, right: false, jump: false, dash: false, attack: false, swap: false,
 });
 
 const SPAWNS = [
@@ -50,29 +51,14 @@ export function makePlayer(def, index = 0, solo = false) {
     moveSpeed: 290, jumpPower: 830, armor: 0, xpMult: 1,
     crit: 0, magnetRange: 170, doubleJump: 0, jumpsLeft: 0,
     damageThisWave: 0, jumpAnim: 0, landAnim: 0,
-    _prevOnGround: false, _prevJump: false, _prevDash: false,
+    _prevOnGround: false, _prevJump: false, _prevDash: false, _prevSwap: false,
     intent: emptyInput(),
     shopLevels: {}, shopOffers: [], ready: false,
     kills: 0, score: 0,
-    weapon: !solo && index % 2 === 1 ? 'gun' : 'sword',
+    weapon: 'sword', clazz: 'warrior', switchCd: 0,
   };
-  if (!solo) applyClassBonus(p, index);
+  applyClass(p, def.clazz || (index % 2 === 0 ? 'warrior' : 'gunner'));
   return p;
-}
-
-function applyClassBonus(p, index) {
-  if (index % 2 === 0) {
-    p.damage += 10;
-    p.lifesteal += 1;
-    p.maxHp += 20;
-    p.hp = p.maxHp;
-    p.moveSpeed = Math.round(p.moveSpeed * 0.95);
-  } else {
-    p.shootDamage += 8;
-    p.shootCdMax *= 0.85;
-    p.moveSpeed += 20;
-    p.damage = Math.round(p.damage * 0.85);
-  }
 }
 
 export function createWorld(playerDefs, opts = {}) {
@@ -285,6 +271,7 @@ function updatePlayerPhysics(world, p, dt) {
   if (p.attackT > 0) p.attackT -= dt;
   if (p.invuln > 0) p.invuln -= dt;
   if (p.dashCd > 0) p.dashCd -= dt;
+  if (p.switchCd > 0) p.switchCd = Math.max(0, p.switchCd - dt);
   if (p.shootCd > 0) p.shootCd -= dt;
   if (p.shootT > 0) p.shootT -= dt;
 
@@ -413,7 +400,27 @@ function tryDash(world, p) {
   burst(world, p.x + p.w / 2, p.y + p.h * 0.5, 9, p.color, 0.75);
 }
 
+function trySwitch(p) {
+  if (p.dead || p.downed || p.switchCd > 0) return false;
+  p.weapon = p.weapon === 'gun' ? 'sword' : 'gun';
+  p.switchCd = 0.35;
+  p.attackT = 0;
+  p.shootT = 0;
+  // Небольшая задержка перед атакой новым оружием.
+  if (p.weapon === 'gun') p.shootCd = Math.max(p.shootCd, 0.18);
+  else p.attackCd = Math.max(p.attackCd, 0.12);
+  return true;
+}
+
+// Одно активное оружие: J атакует тем, что в руках.
 function tryAttack(world, p) {
+  if (p.dead || p.downed) return;
+  if (p.weapon === 'gun') tryShoot(world, p);
+  else tryMelee(world, p);
+}
+
+function tryMelee(world, p) {
+  if (p.weapon !== 'sword') return;
   if (p.dead || p.downed || p.attackCd > 0 || p.attackT > 0) return;
   p.attackCd = p.attackCdMax;
   p.attackT = 0.24;
@@ -445,6 +452,7 @@ function doPlayerHit(world, p) {
 }
 
 function tryShoot(world, p) {
+  if (p.weapon !== 'gun') return;
   if (p.dead || p.downed || p.shootCd > 0) return;
   let target = null;
   let bestD = Infinity;
@@ -1245,10 +1253,11 @@ export function step(world, inputs, dt) {
     if (p.dead) continue;
     p.intent = inputs[p.id] || emptyInput();
     if (!p.downed) {
+      if (p.intent.swap && !p._prevSwap) trySwitch(p);
       if (p.intent.dash) tryDash(world, p);
       if (p.intent.attack) tryAttack(world, p);
-      if (p.intent.shoot) tryShoot(world, p);
     }
+    p._prevSwap = !!p.intent.swap;
     updatePlayerPhysics(world, p, dt);
   }
 

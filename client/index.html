@@ -22,6 +22,7 @@
 
   <div id="centerHud">
     <div id="waveLbl">ВОЛНА 1</div>
+    <div id="weaponLbl">⚔ МЕЧ · Q</div>
     <div id="comboLbl"></div>
     <div id="enemyLbl">ВРАГОВ 0</div>
   </div>
@@ -45,7 +46,9 @@
 <div id="menu" class="overlay show">
   <div class="menu-box">
     <h1>STICKMAN <span>CO-OP</span></h1>
-    <p class="sub">Один или с друзьями · волны · магазин · Colyseus</p>
+    <p class="sub">Один или с друзьями · волны · магазин · P2P</p>
+
+    <div class="class-picker" id="classPicker"></div>
 
     <div class="fields">
       <label>ИМЯ
@@ -74,7 +77,7 @@
       Платный сервер не нужен. Свой сигналинг: <b>?server=host:port:path</b>.
     </div>
 
-    <div class="keys">A/D — движение · Space — прыжок · Shift — рывок · J — удар · K — выстрел</div>
+    <div class="keys">A/D — движение · Space — прыжок · Shift — рывок · J — атака · Q — смена оружия</div>
   </div>
 </div>
 
@@ -118,16 +121,16 @@
         <div class="row"><b>A / D / ← →</b> — движение</div>
         <div class="row"><b>W / Space / ↑</b> — прыжок (двойной после улучшения)</div>
         <div class="row"><b>Shift</b> — рывок</div>
-        <div class="row"><b>J / Z</b> — удар</div>
-        <div class="row"><b>K / X</b> — выстрел</div>
+        <div class="row"><b>J / Z</b> — атака текущим оружием</div>
+        <div class="row"><b>Q / E</b> — сменить меч ↔ пистолет</div>
         <div class="row"><b>Space / 1–3</b> — магазин</div>
       </div>
       <div class="tut-col">
         <h3>ТЕЛЕФОН</h3>
         <div class="row"><b>◀ ▶</b> — движение</div>
         <div class="row"><b>▲</b> — прыжок</div>
-        <div class="row"><b>⚔</b> — удар</div>
-        <div class="row"><b>➤</b> — выстрел</div>
+        <div class="row"><b>⚔</b> — атака</div>
+        <div class="row"><b>⇄</b> — смена оружия</div>
         <div class="row"><b>≫</b> — рывок</div>
       </div>
     </div>
@@ -170,8 +173,8 @@
     </div>
   </div>
   <div class="tc-right">
-    <button class="tc-btn tc-atk" data-act="attack" type="button"><span class="tc-icon">⚔</span><span class="tc-label">УДАР</span></button>
-    <button class="tc-btn tc-shoot" data-act="shoot" type="button"><span class="tc-icon">➤</span><span class="tc-label">ВЫСТРЕЛ</span></button>
+    <button class="tc-btn tc-atk" data-act="attack" type="button"><span class="tc-icon">⚔</span><span class="tc-label">АТАКА</span></button>
+    <button class="tc-btn tc-swap" data-act="swap" type="button"><span class="tc-icon">⇄</span><span class="tc-label">ОРУЖИЕ</span></button>
     <button class="tc-btn tc-dash" data-act="dash" type="button"><span class="tc-icon">≫</span><span class="tc-label">РЫВОК</span></button>
   </div>
 </div>

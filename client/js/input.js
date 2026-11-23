@@ -1,7 +1,7 @@
 export function createInput() {
   const keys = {};
   const touch = {
-    left: false, right: false, jump: false, dash: false, attack: false, shoot: false,
+    left: false, right: false, jump: false, dash: false, attack: false, swap: false,
   };
   const pointers = new Map();
 
@@ -79,7 +79,7 @@ export function createInput() {
         jump: !!(keys['KeyW'] || keys['Space'] || keys['ArrowUp'] || touch.jump),
         dash: !!(keys['ShiftLeft'] || keys['ShiftRight'] || touch.dash),
         attack: !!(keys['KeyJ'] || keys['KeyZ'] || touch.attack),
-        shoot: !!(keys['KeyK'] || keys['KeyX'] || touch.shoot),
+        swap: !!(keys['KeyQ'] || keys['KeyE'] || touch.swap),
       };
     },
   };

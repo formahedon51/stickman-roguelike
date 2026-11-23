@@ -7,17 +7,17 @@ import {
 import { PLAYER_COLORS, TICK_RATE } from '../shared/constants.js';
 
 const emptyInput = () => ({
-  left: false, right: false, jump: false, dash: false, attack: false, shoot: false,
+  left: false, right: false, jump: false, dash: false, attack: false, swap: false,
 });
 
-export function createDemo({ name, solo, onState, onGameOver }) {
+export function createDemo({ name, solo, clazz, onState, onGameOver }) {
   const selfId = 'local-' + Math.random().toString(36).slice(2, 8);
   const defs = solo
-    ? [{ id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0] }]
+    ? [{ id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0], clazz }]
     : [
-        { id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0] },
-        { id: 'bot-alpha', name: 'Бот Альфа', color: PLAYER_COLORS[1] },
-        { id: 'bot-beta', name: 'Бот Бета', color: PLAYER_COLORS[2] },
+        { id: selfId, name: name || 'Игрок', color: PLAYER_COLORS[0], clazz },
+        { id: 'bot-alpha', name: 'Бот Альфа', color: PLAYER_COLORS[1], clazz: 'warrior' },
+        { id: 'bot-beta', name: 'Бот Бета', color: PLAYER_COLORS[2], clazz: 'gunner' },
       ];
 
   const world = createWorld(defs, { solo: !!solo });
@@ -154,11 +154,16 @@ function botInput(world, p) {
   else if (dx > 20) input.right = true;
 
   const dist = Math.hypot(dx, dy);
-  if (dist < 95) {
-    input.attack = true;
-    if (p.dashCd <= 0 && Math.random() < 0.02) input.dash = true;
-  } else if (dist > 140 && dist < 560 && Math.abs(dy) < 160) {
-    input.shoot = true;
+  if (p.weapon === 'gun') {
+    if (dist > 130 && dist < 640 && Math.abs(dy) < 220) input.attack = true;
+    else if (dist < 80 && p.switchCd <= 0 && Math.random() < 0.05) input.swap = true;
+  } else {
+    if (dist < 100) {
+      input.attack = true;
+      if (p.dashCd <= 0 && Math.random() < 0.02) input.dash = true;
+    } else if (dist > 200 && p.switchCd <= 0 && Math.random() < 0.03) {
+      input.swap = true;
+    }
   }
 
   if (dy < -40 && p.onGround && Math.random() < 0.12) input.jump = true;

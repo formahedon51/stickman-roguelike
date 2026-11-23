@@ -26,14 +26,14 @@ peerjs-server.onrender.com:443 /
 ### Гость → хост
 
 ```json
-{ "t": "hello", "name": "Игрок" }
-{ "t": "input", "intent": { "left": false, "right": true, "jump": false, "dash": false, "attack": true, "shoot": false } }
+{ "t": "hello", "name": "Игрок", "clazz": "warrior" }
+{ "t": "input", "intent": { "left": false, "right": true, "jump": false, "dash": false, "attack": true, "swap": false } }
 { "t": "shopBuy", "index": 0 }
 { "t": "shopReady" }
 { "t": "restart" }
 ```
 
-- `input` — 30 раз/с; хост применяет к игроку с `peer.id` гостя.
+- `input` — 30 раз/с; хост применяет к игроку с `peer.id` гостя. `attack` использует текущее оружие, `swap` меняет меч ↔ пистолет.
 - `shopBuy`/`shopReady` — только в `status === "shop"`.
 - `restart` — после `game_over`.
 
@@ -59,9 +59,9 @@ peerjs-server.onrender.com:443 /
   wave: 4, status: "playing", phase: "fight", time: 61.2,
   players: {
     "host": {
-      id, name, color, x, y, w, h, vx, vy, facing, anim, onGround,
+      id, name, color, clazz, x, y, w, h, vx, vy, facing, anim, onGround,
       hp, maxHp, dead, downed, downedTimer, reviveProgress,
-      attackT, shootT, dashT, weapon, kills, score, ready,
+      attackT, shootT, dashT, weapon, switchCd, kills, score, ready,
       shopLevels: {…}, shopOffers: [
         { upg: { id, name, max }, level, cost, rarity, purchased }
       ]

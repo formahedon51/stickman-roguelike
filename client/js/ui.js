@@ -1,4 +1,5 @@
 import { RARITY_LABEL, RARITY_COLOR } from '../shared/upgrades.js';
+import { CLASSES, CLASS_LIST } from '../shared/classes.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -19,6 +20,7 @@ export function createUI({
     pause: $('pause'),
     lobby: $('lobby'),
     menuStatus: $('menuStatus'),
+    classPicker: $('classPicker'),
     name: $('nameInput'),
     code: $('codeInput'),
     btnSolo: $('btnSolo'),
@@ -41,6 +43,7 @@ export function createUI({
     xpFill: $('xpFill'),
     xpNum: $('xpNum'),
     wave: $('waveLbl'),
+    weapon: $('weaponLbl'),
     combo: $('comboLbl'),
     enemies: $('enemyLbl'),
     coins: $('coinLbl'),
@@ -70,6 +73,7 @@ export function createUI({
   let prefs = {};
   try { prefs = JSON.parse(localStorage.getItem('rg_prefs') || '{}'); } catch (e) { /* noop */ }
   if (prefs.name) els.name.value = prefs.name;
+  let selectedClass = CLASSES[prefs.clazz] ? prefs.clazz : 'warrior';
 
   try {
     const room = new URLSearchParams(location.search).get('room');
@@ -81,12 +85,54 @@ export function createUI({
 
   function savePrefs() {
     try {
-      localStorage.setItem('rg_prefs', JSON.stringify({ name: els.name.value.trim() }));
+      localStorage.setItem('rg_prefs', JSON.stringify({
+        name: els.name.value.trim(),
+        clazz: selectedClass,
+      }));
     } catch (e) { /* noop */ }
+  }
+
+  function buildClassPicker() {
+    if (!els.classPicker) return;
+    els.classPicker.innerHTML = '';
+    for (const cls of CLASS_LIST) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'class-card' + (cls.id === selectedClass ? ' selected' : '');
+      btn.dataset.class = cls.id;
+      btn.style.setProperty('--cls-color', cls.color);
+
+      const icon = document.createElement('span');
+      icon.className = 'cc-icon';
+      icon.textContent = cls.icon;
+
+      const name = document.createElement('span');
+      name.className = 'cc-name';
+      name.textContent = cls.name;
+
+      const desc = document.createElement('span');
+      desc.className = 'cc-desc';
+      desc.textContent = cls.desc;
+
+      btn.appendChild(icon);
+      btn.appendChild(name);
+      btn.appendChild(desc);
+      btn.addEventListener('click', () => {
+        selectedClass = cls.id;
+        for (const c of els.classPicker.children) {
+          c.classList.toggle('selected', c.dataset.class === cls.id);
+        }
+        savePrefs();
+      });
+      els.classPicker.appendChild(btn);
+    }
   }
 
   const getName = () => els.name.value.trim() || 'Игрок';
   const getCode = () => (els.code.value || '').trim().toUpperCase();
+  const getClass = () => selectedClass;
+
+  buildClassPicker();
 
   function setMenuStatus(text, kind) {
     els.menuStatus.textContent = text || '';
@@ -153,8 +199,17 @@ export function createUI({
       const name = document.createElement('b');
       name.textContent = (p.host ? 'ХОСТ · ' : '') + (p.name || 'Игрок');
 
+      const cls = CLASSES[p.clazz];
+      const tag = document.createElement('span');
+      tag.className = 'lobby-class';
+      if (cls) {
+        tag.textContent = cls.icon + ' ' + cls.name;
+        tag.style.color = cls.color;
+      }
+
       row.appendChild(dot);
       row.appendChild(name);
+      row.appendChild(tag);
       els.lobbyPlayers.appendChild(row);
     }
   }
@@ -253,7 +308,8 @@ export function createUI({
       const color = p.color || '#4aa3ff';
       const pct = clamp((p.hp || 0) / (p.maxHp || 100), 0, 1);
       row.dot.style.background = color;
-      row.name.textContent = 'P' + index + ' · ' + (p.name || 'Игрок');
+      row.name.textContent = 'P' + index + ' · ' + (p.name || 'Игрок') +
+        (CLASSES[p.clazz] ? ' ' + CLASSES[p.clazz].icon : '');
       row.fill.style.width = Math.round(pct * 100) + '%';
       row.fill.style.background = color;
       row.hp.textContent = Math.max(0, Math.round(p.hp || 0)) + '/' + Math.round(p.maxHp || 100);
@@ -356,6 +412,20 @@ export function createUI({
     els.xpNum.textContent = Math.round(state.xp || 0) + '/' + (state.xpNext || 30);
 
     els.wave.textContent = 'ВОЛНА ' + Math.max(1, state.wave || 1);
+
+    const me = state.players && state.players[selfId];
+    if (els.weapon) {
+      if (me) {
+        const cls = CLASSES[me.clazz];
+        const gun = me.weapon === 'gun';
+        els.weapon.textContent = (gun ? '➤ ПИСТОЛЕТ' : '⚔ МЕЧ') + ' · Q' +
+          (cls ? ' · ' + cls.name : '');
+        els.weapon.style.color = gun ? '#b79cff' : '#ffd54f';
+      } else {
+        els.weapon.textContent = '';
+      }
+    }
+
     els.combo.textContent = (state.combo || 0) >= 2 ? 'СЕРИЯ ×' + state.combo : '';
     const aliveEnemies = Object.values(state.enemies || {}).filter((e) => e.alive !== false).length;
     const pending = Array.isArray(state.pending) ? state.pending.length : 0;
@@ -425,6 +495,7 @@ export function createUI({
   return {
     getName,
     getCode,
+    getClass,
     setMenuStatus,
     showMenu,
     hideMenu,
