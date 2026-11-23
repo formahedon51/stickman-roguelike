@@ -1,0 +1,1968 @@
+// Авторитетная симуляция забега. Чистый JS без DOM.
+
+import {
+  ARENA, SOLIDS, PLAYER, ENEMY_TYPES, GRAVITY, MAX_ACTIVE_ENEMIES,
+  COMBO_TIME, REVIVE_RANGE, REVIVE_TIME, REVIVE_BLEEDOUT, REVIVE_HP_PCT,
+  WAVE_TIME_LIMIT, MAX_PARTICLES, PLAYER_COLORS,
+} from './constants.js?v=20261123c';
+import { RARITY_MULT, rollOffers, offerPrice } from './upgrades.js?v=20261123c';
+import { applyClass } from './classes.js?v=20261123c';
+import { getWeapon, getWeaponMod } from './weapons.js?v=20261123c';
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const aabb = (a, b) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
+
+// Пересечение отрезка (x1,y1)->(x2,y2) с прямоугольником.
+// Возвращает t входа [0..1] или null. Нужно для пуль на высокой скорости.
+function segmentBoxT(x1, y1, x2, y2, box, pad) {
+  const p = pad || 0;
+  const minX = box.x - p;
+  const maxX = box.x + box.w + p;
+  const minY = box.y - p;
+  const maxY = box.y + box.h + p;
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  if (Math.abs(dx) < 1e-9) {
+    if (x1 < minX || x1 > maxX) return null;
+  } else {
+    let a = (minX - x1) / dx;
+    let b = (maxX - x1) / dx;
+    if (a > b) { const tmp = a; a = b; b = tmp; }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+
+  if (Math.abs(dy) < 1e-9) {
+    if (y1 < minY || y1 > maxY) return null;
+  } else {
+    let a = (minY - y1) / dy;
+    let b = (maxY - y1) / dy;
+    if (a > b) { const tmp = a; a = b; b = tmp; }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+function enemyHurtbox(e) {
+  const padX = e.type === 'boss' ? 6 : e.type === 'brute' ? 4 : 3;
+  const padY = e.type === 'boss' ? 7 : e.type === 'brute' ? 4 : 3;
+  return { x: e.x - padX, y: e.y - padY, w: e.w + padX * 2, h: e.h + padY * 2 };
+}
+
+function lineBlocked(x1, y1, x2, y2, pad) {
+  for (const s of SOLIDS) {
+    if (segmentBoxT(x1, y1, x2, y2, s, pad || 0) !== null) return true;
+  }
+  return false;
+}
+
+// Упреждение по скорости цели: пуля летит в точку, где цель будет через t.
+function predictTargetPoint(originX, originY, target, speed) {
+  const tx0 = target.x + target.w / 2;
+  const ty0 = target.y + target.h / 2;
+  let tx = tx0;
+  let ty = ty0;
+  for (let i = 0; i < 3; i++) {
+    const d = Math.hypot(tx - originX, ty - originY);
+    const t = Math.min(1.4, d / Math.max(1, speed));
+    tx = tx0 + (target.vx || 0) * t;
+    ty = ty0 + (target.vy || 0) * t * 0.9;
+  }
+  return { x: tx, y: ty };
+}
+
+function steerProjectile(b, target, turnRate, dt) {
+  const want = Math.atan2((target.y + target.h / 2) - b.y, (target.x + target.w / 2) - b.x);
+  const cur = Math.atan2(b.vy, b.vx);
+  let diff = want - cur;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const turn = Math.min(Math.abs(diff), turnRate * dt);
+  if (turn <= 0) return;
+  const ang = cur + Math.sign(diff) * turn;
+  const sp = Math.hypot(b.vx, b.vy);
+  b.vx = Math.cos(ang) * sp;
+  b.vy = Math.sin(ang) * sp;
+}
+
+const emptyInput = () => ({
+  left: false, right: false, jump: false, dash: false, attack: false, swap: false,
+});
+
+const SPAWNS = [
+  { x: 70, y: null }, { x: 220, y: null }, { x: 380, y: null },
+  { x: 520, y: null }, { x: 760, y: null }, { x: 900, y: null },
+  { x: ARENA.w - 100, y: null }, { x: ARENA.w - 250, y: null },
+];
+
+/* ------------------------------------------------------------------ */
+/* Игроки                                                              */
+/* ------------------------------------------------------------------ */
+
+export function makePlayer(def, index = 0, solo = false) {
+  const p = {
+    id: def.id,
+    name: def.name || 'Игрок',
+    color: def.color || PLAYER_COLORS[index % PLAYER_COLORS.length],
+    w: PLAYER.w,
+    h: PLAYER.h,
+    x: 200 + (index % 8) * 120,
+    y: ARENA.floorY - PLAYER.h,
+    vx: 0, vy: 0, kb: 0,
+    onGround: false, facing: 1, anim: 0, coyote: 0,
+    hp: PLAYER.maxHp, maxHp: PLAYER.maxHp, invuln: 0,
+    dead: false, downed: false, downedTimer: 0, reviveProgress: 0,
+    attackCd: 0, attackT: 0, attackCdMax: 0.36, attackRange: 54,
+    damage: 34, lifesteal: 0,
+    shootCd: 0, shootT: 0, shootCdMax: 1.0, shootDamage: 24,
+    shootSpeed: 720, multishot: 0, pierce: 0, bulletSize: 0,
+    dashCd: 0, dashT: 0, dashDir: 1, dashCdMax: 0.9,
+    dashSpeed: 900, dashDur: 0.17, dashDamage: 0, dashInvuln: 0,
+    regenT: 0, regenDelay: 3.5, regenRate: 6,
+    moveSpeed: 290, jumpPower: 830, armor: 0, xpMult: 1,
+    crit: 0, critDmg: 2, magnetRange: 170, doubleJump: 0, extraJump: 0, jumpsLeft: 0,
+    retarget: 0,
+    shield: 0, shieldMax: 0, shieldCd: 0, shieldCdMax: 10,
+    bossDmg: 0, lowHpDmg: 0, coinMult: 1,
+    killHeal: 0, thorns: 0, execute: 0,
+    damageMult: 1, rangedMult: 1, meleeMult: 1,
+    shootRateMult: 1, attackRateMult: 1,
+    projSpeedMult: 1, projLifeMult: 1,
+    kbPower: 1, kbResist: 0,
+    weaponMods: {},
+    burnChance: 0, burnDps: 0,
+    poisonChance: 0, poisonDps: 0,
+    slowChance: 0, slowPower: 0, slowTime: 2.5,
+    vulnChance: 0, vulnPower: 0,
+    chainChance: 0, chainDmg: 0, chainRange: 190,
+    explodeChance: 0, explodeDmg: 0, explodeRadius: 0,
+    coinOnKill: 0, shieldOnKill: 0, bossKillHeal: 0,
+    fullHpDmg: 0, airDmg: 0, closeDmg: 0, farDmg: 0,
+    eliteDmg: 0, comboDmg: 0, stationaryDmg: 0, movingDmg: 0,
+    dashBuffDmg: 0, dashBuffT: 0, lastStandDmg: 0,
+    contactArmor: 0, projArmor: 0, dodge: 0, hitInvuln: 0,
+    accelMult: 1, lastStandArmor: 0,
+    discount: 0, interest: 0, luck: 0, bounty: 0,
+    damageThisWave: 0, jumpAnim: 0, landAnim: 0,
+    _prevOnGround: false, _prevJump: false, _prevDash: false, _prevSwap: false,
+    intent: emptyInput(),
+    shopLevels: {}, shopOffers: [], ready: false,
+    kills: 0, score: 0,
+    weapon: 'sword', weaponIndex: 0, arsenal: ['sword'], clazz: 'warrior',
+    switchCd: 0, swapCdMax: 0.35,
+  };
+  applyClass(p, def.clazz || (index % 2 === 0 ? 'warrior' : 'gunner'));
+  return p;
+}
+
+export function createWorld(playerDefs, opts = {}) {
+  const solo = !!opts.solo;
+  const world = {
+    solo,
+    playerCount: playerDefs.length,
+    wave: 0,
+    status: 'playing',     // playing | shop | game_over
+    phase: 'intermission', // intermission | fight | clear | shop | game_over
+    waveTimer: 1.5,
+    clearTimer: 0,
+    time: 0,
+    pending: [],
+    players: {},
+    enemies: {},
+    projectiles: {},
+    pickups: [],
+    particles: [],
+    dmgNumbers: [],
+    decals: [],
+    dashTrails: [],
+    coins: 0,
+    xp: 0,
+    xpNext: 30,
+    level: 1,
+    combo: 0,
+    comboTimer: 0,
+    comboBest: 0,
+    score: 0,
+    wavesCleared: 0,
+    stats: { kills: 0, damage: 0, coinsEarned: 0 },
+    banner: { text: '', sub: '', t: 0, max: 2, color: '#e8eef7' },
+    shake: 0,
+    hurtFlash: 0,
+    levelFlash: 0,
+    hitStop: 0,
+    nextId: 1,
+  };
+  playerDefs.forEach((def, i) => {
+    world.players[def.id] = makePlayer(def, i, solo);
+  });
+  return world;
+}
+
+export function resetWorld(world, playerDefs, opts = {}) {
+  const fresh = createWorld(playerDefs, opts);
+  for (const k of Object.keys(world)) delete world[k];
+  Object.assign(world, fresh);
+  return world;
+}
+
+/* ------------------------------------------------------------------ */
+/* Эффекты                                                             */
+/* ------------------------------------------------------------------ */
+
+function burst(world, x, y, n, color, power) {
+  if (world.particles.length > MAX_PARTICLES) return;
+  power = power || 0.8;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = (60 + Math.random() * 240) * power;
+    world.particles.push({
+      x, y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s - 80,
+      life: 0.3 + Math.random() * 0.5,
+      size: 2 + Math.random() * 3,
+      color,
+    });
+  }
+}
+
+function spawnDmgNumber(world, x, y, val, color, crit) {
+  if (val <= 0) return;
+  world.dmgNumbers.push({
+    x, y,
+    val: Math.round(val),
+    color,
+    life: crit ? 1.0 : 0.8,
+    vy: -150,
+    vx: (Math.random() - 0.5) * 40,
+    crit: !!crit,
+  });
+}
+
+function addDecal(world, x, y, color) {
+  if (world.decals.length >= 24) world.decals.shift();
+  world.decals.push({ x, y, r: 3 + Math.random() * 4, color });
+}
+
+function showBanner(world, text, sub, color) {
+  world.banner.text = text;
+  world.banner.sub = sub || '';
+  world.banner.color = color || '#e8eef7';
+  world.banner.max = sub ? 2.6 : 2.0;
+  world.banner.t = world.banner.max;
+}
+
+function updateEffects(world, dt) {
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    const q = world.particles[i];
+    q.life -= dt;
+    if (q.life <= 0) { world.particles.splice(i, 1); continue; }
+    q.vy += 1100 * dt;
+    q.x += q.vx * dt;
+    q.y += q.vy * dt;
+    q.vx *= 0.985;
+  }
+  for (let i = world.dmgNumbers.length - 1; i >= 0; i--) {
+    const d = world.dmgNumbers[i];
+    d.life -= dt;
+    if (d.life <= 0) { world.dmgNumbers.splice(i, 1); continue; }
+    d.y += d.vy * dt;
+    d.x += (d.vx || 0) * dt;
+    d.vy += 320 * dt;
+  }
+  for (let i = world.dashTrails.length - 1; i >= 0; i--) {
+    world.dashTrails[i].life -= dt;
+    if (world.dashTrails[i].life <= 0) world.dashTrails.splice(i, 1);
+  }
+  if (world.dashTrails.length > 8) world.dashTrails.splice(0, world.dashTrails.length - 8);
+
+  if (world.shake > 0) world.shake = Math.max(0, world.shake - dt * 70);
+  if (world.hurtFlash > 0) world.hurtFlash = Math.max(0, world.hurtFlash - dt);
+  if (world.levelFlash > 0) world.levelFlash = Math.max(0, world.levelFlash - dt);
+
+  if (world.banner.t > 0) world.banner.t -= dt;
+  if (world.comboTimer > 0) {
+    world.comboTimer -= dt;
+    if (world.comboTimer <= 0) world.combo = 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Физика                                                              */
+/* ------------------------------------------------------------------ */
+
+function moveEntity(e, dx, dy) {
+  if (dx !== 0) {
+    const steps = Math.max(1, Math.ceil(Math.abs(dx) / 6));
+    const step = dx / steps;
+    for (let i = 0; i < steps; i++) {
+      e.x += step;
+      let hit = false;
+      for (const s of SOLIDS) {
+        if (!s.blocksX) continue;
+        if (aabb(e, s)) {
+          e.x = step > 0 ? s.x - e.w : s.x + s.w;
+          e.vx = 0;
+          hit = true;
+          break;
+        }
+      }
+      if (hit) break;
+    }
+  }
+
+  e.onGround = false;
+  if (dy !== 0) {
+    const steps = Math.max(1, Math.ceil(Math.abs(dy) / 6));
+    const step = dy / steps;
+    for (let i = 0; i < steps; i++) {
+      e.y += step;
+      let hit = false;
+      for (const s of SOLIDS) {
+        if (!s.blocksY) continue;
+        if (aabb(e, s)) {
+          if (step > 0) {
+            e.y = s.y - e.h;
+            e.vy = 0;
+            e.onGround = true;
+          } else if (step < 0) {
+            e.y = s.y + s.h;
+            e.vy = 0;
+          }
+          hit = true;
+          break;
+        }
+      }
+      if (hit) break;
+    }
+  }
+}
+
+function fixInsideWall(e) {
+  for (const s of SOLIDS) {
+    if (!s.blocksX) continue;
+    if (aabb(e, s)) {
+      if (s.x < ARENA.w / 2) e.x = s.x + s.w;
+      else e.x = s.x - e.w;
+      e.vx = 0;
+    }
+  }
+}
+
+function updatePlayerPhysics(world, p, dt) {
+  if (p.dead) return;
+
+  if (p.downed) {
+    p.vx = 0;
+    p.kb = 0;
+    p.vy = Math.min(p.vy + GRAVITY * dt, 1500);
+    moveEntity(p, 0, p.vy * dt);
+    p._prevOnGround = p.onGround;
+    return;
+  }
+
+  if (p.attackCd > 0) p.attackCd -= dt;
+  if (p.attackT > 0) p.attackT -= dt;
+  if (p.invuln > 0) p.invuln -= dt;
+  if (p.dashCd > 0) p.dashCd -= dt;
+  if (p.switchCd > 0) p.switchCd = Math.max(0, p.switchCd - dt);
+  if (p.dashBuffT > 0) p.dashBuffT = Math.max(0, p.dashBuffT - dt);
+  if (p.shootCd > 0) p.shootCd -= dt;
+  if (p.shootT > 0) p.shootT -= dt;
+
+  p.regenT += dt;
+  if (p.regenT > p.regenDelay && p.hp < p.maxHp) {
+    p.hp = Math.min(p.maxHp, p.hp + p.regenRate * dt);
+  }
+
+  if (p.shieldMax > 0) {
+    p.shieldCd -= dt;
+    if (p.shieldCd <= 0) {
+      p.shield = p.shieldMax;
+      p.shieldCd = p.shieldCdMax;
+    }
+  }
+
+  if (p.dashT > 0) {
+    p.dashT -= dt;
+    p.vx = p.dashDir * p.dashSpeed;
+    const totalDX = p.vx * dt;
+    const dSteps = Math.max(1, Math.ceil(Math.abs(totalDX) / 6));
+    const dStep = totalDX / dSteps;
+    for (let i = 0; i < dSteps; i++) {
+      p.x += dStep;
+      let hit = false;
+      for (const s of SOLIDS) {
+        if (!s.blocksX) continue;
+        if (aabb(p, s)) {
+          p.x = dStep > 0 ? s.x - p.w : s.x + s.w;
+          p.dashT = 0;
+          hit = true;
+          break;
+        }
+      }
+      if (hit) break;
+    }
+    if (p.dashDamage > 0) {
+      for (const e of Object.values(world.enemies)) {
+        if (!e.alive || e._dashHit) continue;
+        if (aabb(p, e)) {
+          e._dashHit = true;
+          damageEnemy(world, e, p.dashDamage, p.dashDir, p);
+        }
+      }
+    }
+    p.anim += dt * 16;
+    world.dashTrails.push({
+      x: p.x, y: p.y, w: p.w, h: p.h, facing: p.facing, life: 0.22, color: p.color,
+    });
+    p._prevOnGround = p.onGround;
+    return;
+  }
+
+  const wasOnGround = p._prevOnGround;
+  let moveX = 0;
+  if (p.intent.left && !p.intent.right) moveX = -1;
+  else if (p.intent.right && !p.intent.left) moveX = 1;
+
+  const atLeftWall = p.x <= ARENA.wall + 4;
+  const atRightWall = p.x + p.w >= ARENA.w - ARENA.wall - 4;
+  if (moveX < 0 && atLeftWall) moveX = 0;
+  if (moveX > 0 && atRightWall) moveX = 0;
+
+  const accel = (p.onGround ? 3200 : 1900) * (p.accelMult || 1);
+  if (moveX < 0) { p.vx -= accel * dt; p.facing = -1; }
+  else if (moveX > 0) { p.vx += accel * dt; p.facing = 1; }
+  else {
+    const fr = (p.onGround ? 3400 : 900) * dt;
+    if (Math.abs(p.vx) <= fr) p.vx = 0;
+    else p.vx -= Math.sign(p.vx) * fr;
+  }
+  p.vx = clamp(p.vx, -p.moveSpeed, p.moveSpeed);
+
+  if (p.onGround) {
+    p.coyote = 0.1;
+    p.jumpsLeft = p.doubleJump + (p.extraJump || 0);
+  } else {
+    p.coyote -= dt;
+  }
+
+  const jumpPressed = !!p.intent.jump && !p._prevJump;
+  p._prevJump = !!p.intent.jump;
+  if (jumpPressed) {
+    if (p.coyote > 0) {
+      p.vy = -p.jumpPower;
+      p.onGround = false;
+      p.coyote = 0;
+      p.jumpAnim = 1.0;
+    } else if ((p.doubleJump > 0 || p.extraJump > 0) && p.jumpsLeft > 0) {
+      p.vy = -p.jumpPower * 0.92;
+      p.jumpsLeft--;
+      p.jumpAnim = 1.0;
+      burst(world, p.x + p.w / 2, p.y + p.h, p.jumpsLeft > 0 ? 6 : 4, '#bfe3ff', 0.6);
+    }
+  }
+
+  p.vy = Math.min(p.vy + GRAVITY * dt, 1500);
+  const vyBeforeMove = p.vy;
+
+  const kfr = 2400 * dt;
+  if (Math.abs(p.kb) <= kfr) p.kb = 0;
+  else p.kb -= Math.sign(p.kb) * kfr;
+
+  moveEntity(p, (p.vx + p.kb) * dt, p.vy * dt);
+
+  if (p.onGround && !wasOnGround && vyBeforeMove > 150) {
+    p.landAnim = 1.0;
+    burst(world, p.x + p.w / 2, p.y + p.h, 5, '#8a8f99', 0.45);
+  }
+
+  p._prevOnGround = p.onGround;
+  if (p.jumpAnim > 0) p.jumpAnim = Math.max(0, p.jumpAnim - dt * 5);
+  if (p.landAnim > 0) p.landAnim = Math.max(0, p.landAnim - dt * 6);
+  p.anim += Math.abs(p.vx) * dt * 0.055;
+  if (p.onGround && Math.abs(p.vx) < 25) {
+    const tgt = Math.round(p.anim / Math.PI) * Math.PI;
+    p.anim = lerp(p.anim, tgt, 1 - Math.pow(0.0008, dt));
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Бой игроков                                                         */
+/* ------------------------------------------------------------------ */
+
+function tryDash(world, p) {
+  if (p.dead || p.downed || p.dashCd > 0 || p.dashT > 0) return;
+  p.dashCd = p.dashCdMax;
+  p.dashT = p.dashDur;
+  p.dashDir = p.intent.left ? -1 : p.intent.right ? 1 : p.facing;
+  p.facing = p.dashDir;
+  p.vy = 0;
+  p.invuln = Math.max(p.invuln, p.dashDur + 0.06 + (p.dashInvuln || 0));
+  if (p.dashBuffDmg > 0) p.dashBuffT = 1.4;
+  for (const e of Object.values(world.enemies)) e._dashHit = false;
+  burst(world, p.x + p.w / 2, p.y + p.h * 0.5, 9, p.color, 0.75);
+}
+
+function trySwitch(p) {
+  if (p.dead || p.downed || p.switchCd > 0) return false;
+  const list = Array.isArray(p.arsenal) && p.arsenal.length ? p.arsenal : [p.weapon || 'sword'];
+  if (list.length < 2) return false;
+  p.weaponIndex = ((p.weaponIndex || 0) + 1) % list.length;
+  p.weapon = list[p.weaponIndex];
+  p.switchCd = p.swapCdMax || 0.35;
+  p.attackT = 0;
+  p.shootT = 0;
+  const w = getWeapon(p.weapon);
+  if (w.kind === 'ranged') p.shootCd = Math.max(p.shootCd, 0.12);
+  else p.attackCd = Math.max(p.attackCd, 0.1);
+  return true;
+}
+
+// Одно активное оружие: J атакует тем, что в руках.
+function tryAttack(world, p) {
+  if (p.dead || p.downed) return;
+  const w = getWeapon(p.weapon);
+  if (w.kind === 'ranged') tryShoot(world, p, w);
+  else tryMelee(world, p, w);
+}
+
+function tryMelee(world, p, w) {
+  if (p.dead || p.downed || p.attackCd > 0 || p.attackT > 0) return;
+  const mod = getWeaponMod(p, p.weapon);
+  p.attackCd = Math.max(0.05, p.attackCdMax * (w.cooldown || 1) *
+    (p.attackRateMult || 1) * (1 - (mod.cooldown || 0)));
+  p.attackT = 0.24 * (w.anim || 1);
+  doPlayerHit(world, p, w, mod);
+}
+
+function doPlayerHit(world, p, w, mod) {
+  const R = p.attackRange * (w.range || 1) * (1 + (mod.range || 0));
+  const hh = (p.h - 8) * (w.height || 1);
+  const hb = {
+    x: p.facing > 0 ? p.x + p.w - 8 : p.x + 8 - R,
+    y: p.y + 4 + (p.h - 8 - hh) / 2,
+    w: R,
+    h: hh,
+  };
+  const dmg = p.damage * (w.damage || 1) * (p.damageMult || 1) *
+    (p.meleeMult || 1) * (1 + (mod.damage || 0));
+  let hit = false;
+  for (const e of Object.values(world.enemies)) {
+    if (!e.alive) continue;
+    if (aabb(hb, enemyHurtbox(e))) {
+      hit = true;
+      damageEnemy(world, e, dmg, p.facing, p, (w.critBonus || 0) + (mod.crit || 0));
+      if (p.lifesteal > 0 && !p.dead) p.hp = Math.min(p.maxHp, p.hp + p.lifesteal);
+    }
+  }
+  if (hit) {
+    world.shake = Math.max(world.shake, w.damage > 1.5 ? 10 : 6);
+    world.hitStop = Math.max(world.hitStop, 0.04);
+    burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 8, w.color || '#9ccdff', 0.7);
+  }
+}
+
+function tryShoot(world, p, w) {
+  if (p.dead || p.downed || p.shootCd > 0) return;
+  const mod = getWeaponMod(p, p.weapon);
+  const originX = p.x + p.w / 2;
+  const originY = p.y + p.h * 0.42;
+  const speed = p.shootSpeed * (w.speed || 1) * (p.projSpeedMult || 1);
+  const life = (w.life || 2) * (p.projLifeMult || 1) * (1 + (mod.life || 0));
+  const maxRange = Math.max(140, speed * life * 1.15);
+
+  let target = null;
+  let bestScore = Infinity;
+  for (const e of Object.values(world.enemies)) {
+    if (!e.alive) continue;
+    const ex = e.x + e.w / 2;
+    const ey = e.y + e.h / 2;
+    const rawDist = Math.hypot(ex - originX, ey - originY);
+    if (rawDist > maxRange) continue;
+    // Не наводимся на цель сквозь стены и платформы.
+    if (lineBlocked(originX, originY, ex, ey, 2)) continue;
+
+    const dx = ex - originX;
+    let score = rawDist;
+    if (p.facing > 0 && dx < 0) score *= 1.35;
+    if (p.facing < 0 && dx > 0) score *= 1.35;
+    if (score < bestScore) { bestScore = score; target = e; }
+  }
+
+  if (target) {
+    p.facing = Math.sign((target.x + target.w / 2) - (p.x + p.w / 2)) || p.facing;
+  }
+  const handX = p.x + p.w / 2 + p.facing * 12;
+  const handY = p.y + p.h * 0.42;
+
+  let aimX;
+  let aimY;
+  if (target) {
+    const aim = predictTargetPoint(handX, handY, target, speed);
+    aimX = aim.x;
+    aimY = aim.y;
+  } else {
+    aimX = handX + p.facing * 120;
+    aimY = handY;
+  }
+  const baseAng = Math.atan2(aimY - handY, aimX - handX);
+
+  const baseShots = Math.max(1, w.shots || 1);
+  const total = baseShots + (p.multishot || 0);
+  const step = w.spread ? w.spread / Math.max(1, total - 1) : 0.16;
+  const damage = p.shootDamage * (w.damage || 1) * (p.damageMult || 1) *
+    (p.rangedMult || 1) * (1 + (mod.damage || 0));
+
+  for (let i = 0; i < total; i++) {
+    const ang = baseAng + (i - (total - 1) / 2) * step;
+    spawnProjectile(world, {
+      x: handX, y: handY,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      r: (w.r || 5) + (p.bulletSize || 0),
+      life,
+      friendly: true,
+      damage,
+      pierce: (p.pierce || 0) + (w.pierce || 0),
+      critBonus: (w.critBonus || 0) + (mod.crit || 0),
+      homing: w.homing || 0,
+      retarget: p.retarget || 0,
+      color: w.color || '#d8c8ff',
+      kind: w.id,
+      owner: p.id,
+      source: p,
+    });
+  }
+  p.shootCd = Math.max(0.04, p.shootCdMax * (w.cooldown || 1) *
+    (p.shootRateMult || 1) * (1 - (mod.cooldown || 0)));
+  p.shootT = 0.18;
+  burst(world, handX, handY, 5, w.color || '#b79cff', 0.5);
+  world.shake = Math.max(world.shake, w.damage > 1.2 ? 4 : 2);
+}
+
+function spawnProjectile(world, data) {
+  const id = 'p' + world.nextId++;
+  world.projectiles[id] = {
+    id,
+    ...data,
+    _hitEnemies: data.friendly ? new Set() : null,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Урон                                                                */
+/* ------------------------------------------------------------------ */
+
+function damageEnemy(world, e, dmg, dir, source, critBonus, silent) {
+  if (!e.alive) return;
+
+  if (e.vulnT > 0) dmg *= 1 + (e.vulnPower || 0);
+  if (e.type === 'shielder' && source) {
+    const toward = ((source.x + source.w / 2) - (e.x + e.w / 2)) * (e.facing || 1);
+    if (toward > -12) dmg *= 0.35;
+  }
+  if (source && source.bossDmg > 0 && e.type === 'boss') dmg *= 1 + source.bossDmg;
+  if (source && source.lowHpDmg > 0 && source.maxHp > 0 && source.hp / source.maxHp <= 0.35) {
+    dmg *= 1 + source.lowHpDmg;
+  }
+
+  if (source && !silent) {
+    let mult = 1;
+    const dist = Math.hypot(
+      (source.x + source.w / 2) - (e.x + e.w / 2),
+      (source.y + source.h / 2) - (e.y + e.h / 2),
+    );
+    const hpPct = source.maxHp > 0 ? source.hp / source.maxHp : 1;
+    if (source.fullHpDmg > 0 && hpPct >= 0.85) mult += source.fullHpDmg;
+    if (source.lastStandDmg > 0 && hpPct <= 0.3) mult += source.lastStandDmg;
+    if (source.airDmg > 0 && !source.onGround) mult += source.airDmg;
+    if (source.closeDmg > 0 && dist < 160) mult += source.closeDmg;
+    if (source.farDmg > 0 && dist > 420) mult += source.farDmg;
+    if (source.eliteDmg > 0 && (e.type === 'boss' || e.type === 'brute' || e.type === 'shielder' || e.type === 'splitter' || e.type === 'summoner')) mult += source.eliteDmg;
+    if (source.stationaryDmg > 0 && Math.abs(source.vx) < 30) mult += source.stationaryDmg;
+    if (source.movingDmg > 0 && Math.abs(source.vx) > 120) mult += source.movingDmg;
+    if (source.dashBuffDmg > 0 && source.dashBuffT > 0) mult += source.dashBuffDmg;
+    if (source.comboDmg > 0 && world.combo > 1) {
+      mult += Math.min(world.combo, 20) * source.comboDmg;
+    }
+    dmg *= mult;
+  }
+
+  let crit = false;
+  const critChance = Math.min(1, (source ? source.crit : 0) + (critBonus || 0));
+  if (!silent && critChance > 0 && Math.random() < critChance) {
+    dmg *= (source && source.critDmg) || 2;
+    crit = true;
+  }
+  if (!silent && source && source.execute > 0 && e.type !== 'boss' && e.hp > 0 && e.hp < e.maxHp * 0.22 && Math.random() < source.execute) {
+    dmg = e.hp + 1;
+    crit = true;
+  }
+
+  e.hp -= dmg;
+  if (!silent) {
+    e.hitFlash = 0.14;
+    e.kb = dir * (e.type === 'boss' ? 100 : 320) * (source ? (source.kbPower || 1) : 1);
+    if (e.onGround && e.type !== 'boss') e.vy = -180;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 8, crit ? '#ffd54f' : '#ff5b5b', 0.7);
+  }
+
+  if (source) {
+    source.damageThisWave += dmg;
+    source.fitness = (source.fitness || 0) + dmg * 0.15;
+    world.stats.damage += dmg;
+    if (!silent) {
+      spawnDmgNumber(world, e.x + e.w / 2, e.y - 5, dmg, crit ? '#ffd54f' : source.color, crit);
+    }
+  }
+
+  // Аilments применяются только от прямых попаданий, не от DoT.
+  if (source && !silent && e.alive) {
+    if (source.burnChance > 0 && Math.random() < source.burnChance) {
+      e.burnT = Math.max(e.burnT || 0, 3);
+      e.burnDps = Math.max(e.burnDps || 0, source.burnDps || 0);
+      e.burnSource = source;
+    }
+    if (source.poisonChance > 0 && Math.random() < source.poisonChance) {
+      e.poisonT = Math.max(e.poisonT || 0, 3.5);
+      e.poisonDps = Math.max(e.poisonDps || 0, source.poisonDps || 0);
+      e.poisonSource = source;
+    }
+    if (source.slowChance > 0 && Math.random() < source.slowChance) {
+      e.slowT = Math.max(e.slowT || 0, source.slowTime || 2.5);
+      e.slowPower = Math.max(e.slowPower || 0, source.slowPower || 0);
+    }
+    if (source.vulnChance > 0 && Math.random() < source.vulnChance) {
+      e.vulnT = Math.max(e.vulnT || 0, 3);
+      e.vulnPower = Math.max(e.vulnPower || 0, source.vulnPower || 0);
+    }
+    if (source.chainChance > 0 && !source._chaining && Math.random() < source.chainChance) {
+      let chainTarget = null;
+      let bestD = Infinity;
+      const range = source.chainRange || 190;
+      for (const o of Object.values(world.enemies)) {
+        if (!o.alive || o === e) continue;
+        const d = Math.hypot((o.x + o.w / 2) - (e.x + e.w / 2), (o.y + o.h / 2) - (e.y + e.h / 2));
+        if (d < range && d < bestD) { bestD = d; chainTarget = o; }
+      }
+      if (chainTarget) {
+        source._chaining = true;
+        damageEnemy(world, chainTarget, source.chainDmg || 0, dir, source, 0, true);
+        source._chaining = false;
+      }
+    }
+  }
+
+  if (e.hp <= 0) {
+    e.alive = false;
+    e.hp = 0;
+    world.combo += 1;
+    world.comboTimer = COMBO_TIME;
+    if (world.combo > world.comboBest) world.comboBest = world.combo;
+    const mult = 1 + Math.min(world.combo - 1, 20) * 0.1;
+    world.score += Math.round(e.score * mult);
+    world.stats.kills += 1;
+    if (source) {
+      source.kills += 1;
+      source.score += Math.round(e.score * mult);
+      if (source.killHeal > 0 && !source.dead) {
+        source.hp = Math.min(source.maxHp, source.hp + source.killHeal);
+      }
+      if (source.coinOnKill > 0) {
+        world.coins += source.coinOnKill;
+        world.stats.coinsEarned += source.coinOnKill;
+      }
+      if (source.shieldOnKill > 0 && source.shieldMax > 0) {
+        source.shield = Math.min(source.shieldMax, source.shield + source.shieldOnKill);
+      }
+      if (source.bossKillHeal > 0 && e.type === 'boss' && !source.dead) {
+        source.hp = Math.min(source.maxHp, source.hp + source.bossKillHeal);
+      }
+      if (source.bounty > 0 && (e.type === 'boss' || e.type === 'brute')) {
+        const bonus = Math.round((e.type === 'boss' ? 10 : 3) * (1 + source.bounty));
+        world.coins += bonus;
+        world.stats.coinsEarned += bonus;
+      }
+      if (source.explodeChance > 0 && !source._exploding && Math.random() < source.explodeChance) {
+        source._exploding = true;
+        const radius = source.explodeRadius || 120;
+        for (const o of Object.values(world.enemies)) {
+          if (!o.alive || o === e) continue;
+          const d = Math.hypot((o.x + o.w / 2) - (e.x + e.w / 2), (o.y + o.h / 2) - (e.y + e.h / 2));
+          if (d <= radius) damageEnemy(world, o, source.explodeDmg || 0, dir, source, 0, true);
+        }
+        burst(world, e.x + e.w / 2, e.y + e.h / 2, 24, '#ffb347', 1.3);
+        source._exploding = false;
+      }
+    }
+
+    const bigKill = e.type === 'boss' || e.type === 'brute' || e.type === 'shielder' || e.type === 'splitter';
+    world.shake = Math.max(world.shake, bigKill ? 15 : 9);
+    world.hitStop = Math.max(world.hitStop, bigKill ? 0.08 : 0.05);
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, bigKill ? 40 : 20, e.color, bigKill ? 1.6 : 1.1);
+    spawnDrops(world, e.x + e.w / 2, e.y + e.h / 2, e);
+    if (e.type === 'splitter' && !e._splitDone) {
+      e._splitDone = true;
+      const aliveNow = Object.values(world.enemies).filter((o) => o.alive).length;
+      const slots = Math.max(0, MAX_ACTIVE_ENEMIES - aliveNow);
+      for (let i = 0; i < Math.min(2, slots); i++) {
+        const sx = clamp(e.x + (i === 0 ? -28 : 28), ARENA.wall + 20, ARENA.w - 50);
+        createEnemy(world, { type: 'spawnling', x: sx, y: null });
+      }
+      burst(world, e.x + e.w / 2, e.y + e.h / 2, 20, '#8dff6b', 1.2);
+    }
+    addDecal(world, e.x + e.w / 2, ARENA.floorY - 2, e.color);
+  }
+}
+
+function damagePlayer(world, p, amount, dir, attacker, kind) {
+  if (p.dead || p.downed || p.invuln > 0) return;
+  if (p.dodge > 0 && Math.random() < p.dodge) {
+    p.invuln = Math.max(p.invuln, 0.35);
+    burst(world, p.x + p.w / 2, p.y + p.h / 2, 8, '#d8c8ff', 0.6);
+    return;
+  }
+  let armor = Math.min(0.85, p.armor);
+  if (kind === 'contact' && p.contactArmor > 0) {
+    armor = 1 - (1 - armor) * (1 - p.contactArmor);
+  }
+  if (kind === 'projectile' && p.projArmor > 0) {
+    armor = 1 - (1 - armor) * (1 - p.projArmor);
+  }
+  if (p.lastStandArmor > 0 && p.maxHp > 0 && p.hp / p.maxHp <= 0.3) {
+    armor = 1 - (1 - armor) * (1 - p.lastStandArmor);
+  }
+  let dmg = amount * (1 - Math.min(0.85, armor));
+  if (p.shield > 0 && dmg > 0) {
+    const absorbed = Math.min(p.shield, dmg);
+    p.shield -= absorbed;
+    dmg -= absorbed;
+    p.shieldCd = Math.max(p.shieldCd, 2);
+    burst(world, p.x + p.w / 2, p.y + p.h / 2, 8, '#7fe7ff', 0.7);
+    if (p.shield <= 0) p.shield = 0;
+  }
+  if (dmg <= 0) {
+    p.invuln = Math.max(p.invuln, 0.35);
+    world.shake = Math.max(world.shake, 5);
+    return;
+  }
+  p.hp -= dmg;
+  p.invuln = 0.9 + (p.hitInvuln || 0);
+  p.kb = (dir || 1) * 340 * (1 - Math.min(0.8, p.kbResist || 0));
+  p.vy = -280;
+  p.regenT = 0;
+  world.shake = 14;
+  world.hurtFlash = 0.45;
+  world.hitStop = Math.max(world.hitStop, 0.06);
+  burst(world, p.x + p.w / 2, p.y + p.h / 2, 16, p.color, 1.1);
+
+  if (attacker && attacker.alive && p.hp > 0 && p.thorns > 0) {
+    damageEnemy(world, attacker, p.thorns, Math.sign((attacker.x + attacker.w / 2) - (p.x + p.w / 2)) || 1, p);
+  }
+
+  if (p.hp <= 0) {
+    p.hp = 0;
+    if (canBeDowned(world, p)) {
+      p.downed = true;
+      p.downedTimer = REVIVE_BLEEDOUT;
+      p.reviveProgress = 0;
+      p.vx = 0;
+      burst(world, p.x + p.w / 2, p.y + p.h / 2, 24, '#ff6b6b', 1.4);
+      world.shake = 18;
+    } else {
+      p.dead = true;
+      burst(world, p.x + p.w / 2, p.y + p.h / 2, 30, p.color, 1.6);
+      world.shake = 20;
+    }
+  }
+}
+
+function canBeDowned(world, p) {
+  for (const other of Object.values(world.players)) {
+    if (other === p) continue;
+    if (!other.dead && !other.downed) return true;
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Враги                                                               */
+/* ------------------------------------------------------------------ */
+
+function createEnemy(world, sp) {
+  const T = ENEMY_TYPES[sp.type];
+  let hpMult = Math.min(1 + (world.wave - 1) * 0.06, 2.8);
+  let spdMult = Math.min(1 + (world.wave - 1) * 0.018, 1.8);
+  if (world.solo) {
+    hpMult *= 0.9;
+    if (sp.type === 'boss') hpMult *= 0.62;
+  } else if (world.playerCount > 2) hpMult *= 1 + (world.playerCount - 2) * 0.06;
+  if (sp.type === 'boss') {
+    const bossWave = Math.floor(world.wave / 5);
+    hpMult *= 1 + bossWave * 0.7;
+    spdMult *= 1 + bossWave * 0.04;
+  }
+  const y = (sp.y === null || sp.y === undefined)
+    ? (T.flying ? ARENA.floorY - T.h - 210 : ARENA.floorY - T.h)
+    : sp.y;
+  const e = {
+    id: 'e' + world.nextId++,
+    type: sp.type,
+    x: sp.x, y,
+    w: T.w, h: T.h,
+    vx: 0, vy: 0, kb: 0,
+    onGround: false,
+    flying: !!T.flying,
+    hp: T.hp * hpMult,
+    maxHp: T.hp * hpMult,
+    speed: T.speed * spdMult,
+    dmg: T.dmg * (world.solo ? 0.82 : 1),
+    score: T.score,
+    color: T.color,
+    facing: -1,
+    anim: 0,
+    hitFlash: 0,
+    contactCd: 0,
+    jumpCd: 0,
+    healCd: 1.5 + Math.random(),
+    summonCd: 2.5,
+    summonCount: 0,
+    st: 'chase',
+    t: 0,
+    alive: true,
+    _dashHit: false,
+    enrage: false,
+  };
+  world.enemies[e.id] = e;
+  burst(world, sp.x + T.w / 2, y + T.h / 2, sp.type === 'boss' ? 40 : 10, T.color, sp.type === 'boss' ? 1.6 : 0.85);
+}
+
+function nearestAlivePlayer(world, e) {
+  let best = null;
+  let bestD = Infinity;
+  for (const p of Object.values(world.players)) {
+    if (p.dead || p.downed) continue;
+    const d = dist2(p.x + p.w / 2, p.y + p.h / 2, e.x + e.w / 2, e.y + e.h / 2);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+function updateEnemies(world, dt) {
+  for (const [id, e] of Object.entries(world.enemies)) {
+    if (!e.alive) { delete world.enemies[id]; continue; }
+    e.hitFlash = Math.max(0, e.hitFlash - dt);
+    e.contactCd = Math.max(0, e.contactCd - dt);
+    e.jumpCd = Math.max(0, e.jumpCd - dt);
+    e.anim += dt * (3 + Math.abs(e.vx) * 0.05);
+    if (!e.flying) e.vy += GRAVITY * dt;
+
+    let slowFactor = 1;
+    if (e.slowT > 0) {
+      e.slowT = Math.max(0, e.slowT - dt);
+      slowFactor = 1 - Math.min(0.8, e.slowPower || 0);
+    }
+    if (e.vulnT > 0) e.vulnT = Math.max(0, e.vulnT - dt);
+
+    if (e.burnT > 0) {
+      e.burnT = Math.max(0, e.burnT - dt);
+      e.burnAcc = (e.burnAcc || 0) + dt;
+      if (e.burnAcc >= 0.25) {
+        e.burnAcc -= 0.25;
+        damageEnemy(world, e, (e.burnDps || 0) * 0.25, 1, e.burnSource || null, 0, true);
+      }
+    }
+    if (e.poisonT > 0) {
+      e.poisonT = Math.max(0, e.poisonT - dt);
+      e.poisonAcc = (e.poisonAcc || 0) + dt;
+      if (e.poisonAcc >= 0.3) {
+        e.poisonAcc -= 0.3;
+        damageEnemy(world, e, (e.poisonDps || 0) * 0.3, 1, e.poisonSource || null, 0, true);
+      }
+    }
+    if (!e.alive) continue;
+
+    const kfr = 1700 * dt;
+    if (Math.abs(e.kb) <= kfr) e.kb = 0;
+    else e.kb -= Math.sign(e.kb) * kfr;
+
+    const target = nearestAlivePlayer(world, e);
+    if (!target) {
+      e.vx = 0;
+      moveEntity(e, e.kb * dt, e.vy * dt);
+      continue;
+    }
+
+    if (e.type === 'grunt') aiGrunt(world, e, dt, target);
+    else if (e.type === 'brute') aiBrute(world, e, dt, target);
+    else if (e.type === 'thrower') aiThrower(world, e, dt, target);
+    else if (e.type === 'boss') aiBoss(world, e, dt, target);
+    else if (e.type === 'runner') aiRunner(world, e, dt, target);
+    else if (e.type === 'shielder') aiShielder(world, e, dt, target);
+    else if (e.type === 'bomber') aiBomber(world, e, dt, target);
+    else if (e.type === 'flyer') aiFlyer(world, e, dt, target);
+    else if (e.type === 'healer') aiHealer(world, e, dt, target);
+    else if (e.type === 'sniper') aiSniper(world, e, dt, target);
+    else if (e.type === 'summoner') aiSummoner(world, e, dt, target);
+    else if (e.type === 'splitter') aiSplitter(world, e, dt, target);
+    else if (e.type === 'spawnling') aiSpawnling(world, e, dt, target);
+
+    if (!e.alive) continue;
+    if (slowFactor < 1) e.vx *= slowFactor;
+    moveEntity(e, (e.vx + e.kb) * dt, e.vy * dt);
+  }
+}
+
+function aiGrunt(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+
+  let sideStep = 0;
+  let nearCount = 0;
+  let nearDx = 0;
+  for (const o of Object.values(world.enemies)) {
+    if (o === e || !o.alive || o.type !== 'grunt') continue;
+    if (Math.abs((o.y + o.h) - (e.y + e.h)) > 40) continue;
+    const odx = (o.x + o.w / 2) - ecx;
+    if (Math.abs(odx) < 80) { nearCount++; nearDx += odx; }
+  }
+  if (nearCount >= 2 && Math.abs(nearDx) < 60) sideStep = (nearDx >= 0 ? -1 : 1) * 0.3;
+
+  e.vx = (dir + sideStep) * e.speed;
+  if (e.onGround && e.jumpCd <= 0) {
+    if (p.y + p.h < e.y - 40 && dist < 140) { e.vy = -830; e.jumpCd = 0.7; }
+    else if (Math.abs(e.vx) < 20 && dist > 80 && Math.random() < 0.15) { e.vy = -780; e.jumpCd = 1.2; }
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.9;
+  }
+}
+
+function aiBrute(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.t -= dt;
+
+  if (e.st === 'chase') {
+    e.facing = dir;
+    let otherAttacking = false;
+    for (const o of Object.values(world.enemies)) {
+      if (o === e || !o.alive || o.type !== 'brute') continue;
+      if ((o.st === 'windup' || o.st === 'strike') && Math.abs((o.x + o.w / 2) - ecx) < 240) {
+        otherAttacking = true;
+        break;
+      }
+    }
+    e.vx = dir * e.speed * (otherAttacking ? 0.6 : 1.1);
+    if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 50 && dist < 240) {
+      e.vy = -780;
+      e.jumpCd = 1.3;
+    }
+    if (dist < 115 && Math.abs(p.y - e.y) < 95 && e.t <= 0 && !otherAttacking) {
+      e.st = 'windup';
+      e.t = 0.5;
+      e.vx = 0;
+    }
+  } else if (e.st === 'windup') {
+    e.vx = 0;
+    e.facing = dir;
+    if (e.t <= 0) {
+      e.st = 'strike';
+      e.t = 0.16;
+      const hb = {
+        x: e.facing > 0 ? e.x + e.w : e.x - 52,
+        y: e.y + 8, w: 52, h: e.h - 8,
+      };
+      burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 14, '#ff3030', 1);
+      world.shake = Math.max(world.shake, 10);
+      if (aabb(hb, p)) damagePlayer(world, p, e.dmg, e.facing, e, 'contact');
+    }
+  } else if (e.st === 'strike') {
+    e.vx = 0;
+    if (e.t <= 0) { e.st = 'recover'; e.t = 0.6; }
+  } else {
+    e.vx = 0;
+    if (e.t <= 0) { e.st = 'chase'; e.t = 0.2; }
+  }
+}
+
+function aiThrower(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+
+  const sameLevel = Math.abs((p.y + p.h) - (e.y + e.h)) < 50;
+  if (sameLevel && dist < 200) e.vx = -dir * e.speed * 1.2;
+  else if (dist < 240) e.vx = -dir * e.speed * 0.7;
+  else if (dist > 400) e.vx = dir * e.speed * 0.8;
+  else e.vx = 0;
+
+  if (e.onGround && e.jumpCd <= 0) {
+    if (p.y + p.h < e.y - 55 && dist < 320) { e.vy = -720; e.jumpCd = 1.4; }
+    else if (sameLevel && dist < 200 && Math.random() < 0.04) { e.vy = -750; e.jumpCd = 1.6; }
+  }
+
+  e.t -= dt;
+  if (e.t <= 0 && dist < 600 && dist > 120) {
+    e.t = 1.9 + Math.random() * 0.5;
+    const flight = Math.min(1.0, dist / 430);
+    const px = pcx + p.vx * flight * 0.6;
+    const py = p.y + p.h / 2 + p.vy * flight * 0.4;
+    const ex = e.x + e.w / 2;
+    const ey = e.y + e.h * 0.35;
+    const ang = Math.atan2(py - ey, px - ex);
+    spawnProjectile(world, {
+      x: ex, y: ey,
+      vx: Math.cos(ang) * 430,
+      vy: Math.sin(ang) * 430,
+      r: 6, life: 3,
+      friendly: false,
+      source: e,
+    });
+    burst(world, ex, ey, 5, '#ff8a6a', 0.5);
+  }
+}
+
+function aiRunner(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+
+  if (e.onGround && e.jumpCd <= 0) {
+    if (p.y + p.h < e.y - 35 && dist < 200) {
+      e.vy = -790;
+      e.jumpCd = 0.9;
+    } else if (Math.random() < 0.025) {
+      e.vy = -740;
+      e.jumpCd = 1.1;
+    }
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.8;
+  }
+}
+
+function aiShielder(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dist > 48 ? dir * e.speed : 0;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 45 && dist < 220) {
+    e.vy = -760;
+    e.jumpCd = 1.3;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.15;
+  }
+}
+
+function explodeBomber(world, e) {
+  const radius = 105;
+  const ex = e.x + e.w / 2;
+  const ey = e.y + e.h / 2;
+  burst(world, ex, ey, 38, '#ffb347', 1.8);
+  world.shake = Math.max(world.shake, 18);
+  world.hitStop = Math.max(world.hitStop, 0.08);
+  for (const pl of Object.values(world.players)) {
+    if (pl.dead || pl.downed) continue;
+    if (Math.hypot(pl.x + pl.w / 2 - ex, pl.y + pl.h / 2 - ey) <= radius + pl.w / 2) {
+      damagePlayer(world, pl, e.dmg, Math.sign(pl.x - e.x) || 1, e, 'contact');
+    }
+  }
+  damageEnemy(world, e, e.hp + 9999, 1, null, 0, true);
+}
+
+function aiBomber(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+
+  if (e.st === 'fuse') {
+    e.vx = 0;
+    e.t -= dt;
+    if (e.t <= 0) explodeBomber(world, e);
+    return;
+  }
+
+  e.vx = dir * e.speed;
+  if (dist < 115 || e.hp < e.maxHp * 0.35) {
+    e.st = 'fuse';
+    e.t = 0.9;
+    e.vx = 0;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 12, '#ffb347', 0.9);
+  }
+}
+
+function aiFlyer(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.t -= dt;
+
+  if (e.st === 'dive') {
+    if (e.t <= 0) { e.st = 'chase'; e.t = 1.1; }
+  } else if (e.t <= 0 && Math.abs(dx) < 230) {
+    e.st = 'dive';
+    e.t = 0.55;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 8, '#d8c8ff', 0.6);
+  }
+
+  const hoverY = Math.max(120, p.y - 90 + Math.sin(e.anim * 0.8) * 34);
+  e.vx = dir * e.speed * (e.st === 'dive' ? 1.35 : 0.9);
+  if (e.st === 'dive') {
+    e.vy = Math.max(e.vy, 320);
+  } else {
+    e.vy = clamp((hoverY - e.y) * 2.8, -220, 220);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.9;
+  }
+}
+
+function aiHealer(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  if (dist < 220) e.vx = -dir * e.speed;
+  else if (dist > 430) e.vx = dir * e.speed;
+  else e.vx = 0;
+
+  e.healCd -= dt;
+  if (e.healCd <= 0) {
+    let healed = 0;
+    for (const o of Object.values(world.enemies)) {
+      if (o === e || !o.alive) continue;
+      const d = Math.hypot(
+        (o.x + o.w / 2) - (e.x + e.w / 2),
+        (o.y + o.h / 2) - (e.y + e.h / 2),
+      );
+      if (d < 380 && o.hp < o.maxHp) {
+        o.hp = Math.min(o.maxHp, o.hp + o.maxHp * 0.18 + 10);
+        burst(world, o.x + o.w / 2, o.y + o.h / 2, 5, '#4affa0', 0.5);
+        healed++;
+      }
+    }
+    e.healCd = healed > 0 ? 3.8 : 1.5;
+    if (healed > 0) burst(world, e.x + e.w / 2, e.y + e.h / 2, 10, '#4affa0', 0.8);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.2;
+  }
+}
+
+function aiSniper(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.t -= dt;
+
+  if (dist < 250) e.vx = -dir * e.speed;
+  else if (dist > 620) e.vx = dir * e.speed * 0.8;
+  else e.vx = 0;
+
+  if (e.st === 'aim') {
+    e.vx = 0;
+    if (e.t <= 0) {
+      const ex = e.x + e.w / 2;
+      const ey = e.y + e.h * 0.4;
+      const flight = Math.min(1.1, dist / 900);
+      const px = pcx + p.vx * flight * 0.8;
+      const py = p.y + p.h / 2 + p.vy * flight * 0.5;
+      const ang = Math.atan2(py - ey, px - ex);
+      spawnProjectile(world, {
+        x: ex, y: ey,
+        vx: Math.cos(ang) * 900,
+        vy: Math.sin(ang) * 900,
+        r: 4, life: 2.2,
+        friendly: false,
+        damage: 10,
+        source: e,
+        color: '#7fe7ff',
+        kind: 'sniper',
+      });
+      burst(world, ex, ey, 6, '#7fe7ff', 0.6);
+      e.st = 'chase';
+      e.t = 2.2;
+    }
+  } else if (e.t <= 0 && dist < 820) {
+    e.st = 'aim';
+    e.t = 0.55;
+    e.vx = 0;
+  }
+}
+
+function aiSummoner(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  if (dist < 270) e.vx = -dir * e.speed;
+  else if (dist > 470) e.vx = dir * e.speed;
+  else e.vx = 0;
+
+  e.summonCd -= dt;
+  const alive = Object.values(world.enemies).filter((o) => o.alive).length;
+  if (e.summonCd <= 0 && e.summonCount < 4 && alive < MAX_ACTIVE_ENEMIES - 1) {
+    const sx = clamp(e.x + (Math.random() < 0.5 ? -55 : 55), ARENA.wall + 30, ARENA.w - 50);
+    createEnemy(world, { type: 'spawnling', x: sx, y: null });
+    e.summonCount += 1;
+    e.summonCd = 6.5;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 14, '#c4a7ff', 0.9);
+  }
+
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.2;
+  }
+}
+
+function aiSplitter(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 45) {
+    e.vy = -760;
+    e.jumpCd = 1.4;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 1.1;
+  }
+}
+
+function aiSpawnling(world, e, dt, p) {
+  const dx = (p.x + p.w / 2) - (e.x + e.w / 2);
+  const dist = Math.abs(dx);
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.vx = dir * e.speed;
+  if (e.onGround && e.jumpCd <= 0 && p.y + p.h < e.y - 30 && dist < 160) {
+    e.vy = -720;
+    e.jumpCd = 1.0;
+  }
+  if (e.contactCd <= 0 && aabb(p, e)) {
+    damagePlayer(world, p, e.dmg, dir, e, 'contact');
+    e.contactCd = 0.75;
+  }
+}
+
+function aiBoss(world, e, dt, p) {
+  const pcx = p.x + p.w / 2;
+  const ecx = e.x + e.w / 2;
+  const dx = pcx - ecx;
+  const dir = Math.sign(dx) || 1;
+  e.facing = dir;
+  e.t -= dt;
+
+  if (!e.enrage && e.hp < e.maxHp * 0.5) {
+    e.enrage = true;
+    e.speed *= 1.35;
+    burst(world, e.x + e.w / 2, e.y + e.h / 2, 30, '#ff3030', 1.8);
+    world.shake = 15;
+  }
+
+  if (e.st === 'chase') {
+    e.vx = dir * e.speed;
+    if (e.t <= 0 && e.onGround) {
+      if (Math.random() < 0.55) { e.st = 'slamWindup'; e.t = 0.75; e.vx = 0; }
+      else { e.st = 'sprayWindup'; e.t = 0.65; e.vx = 0; }
+    }
+  } else if (e.st === 'slamWindup') {
+    e.vx = 0;
+    if (e.t <= 0) {
+      e.st = 'slamAir';
+      e.t = 0.65;
+      e.vy = -1100;
+      e.vx = dir * 380;
+    }
+  } else if (e.st === 'slamAir') {
+    if (e.onGround && e.t < 0.4) {
+      e.st = 'slamLand';
+      e.t = 0.4;
+      const hb = { x: e.x - 50, y: e.y + e.h - 70, w: e.w + 100, h: 70 };
+      burst(world, hb.x + hb.w / 2, hb.y + hb.h / 2, 40, '#ff3030', 1.8);
+      world.shake = 18;
+      world.hitStop = Math.max(world.hitStop, 0.08);
+      for (const pl of Object.values(world.players)) {
+        if (pl.dead || pl.downed) continue;
+        if (aabb(hb, pl)) damagePlayer(world, pl, e.dmg, dir, e, 'contact');
+      }
+    }
+  } else if (e.st === 'slamLand') {
+    e.vx = 0;
+    if (e.t <= 0) { e.st = 'chase'; e.t = e.enrage ? 1.6 : 2.6; }
+  } else if (e.st === 'sprayWindup') {
+    e.vx = 0;
+    if (e.t <= 0) {
+      e.st = 'sprayFire';
+      e.t = 0.5;
+      const baseAng = Math.atan2(
+        p.y + p.h / 2 - (e.y + e.h * 0.4),
+        p.x + p.w / 2 - (e.x + e.w / 2),
+      );
+      const count = e.enrage ? 7 : 5;
+      for (let i = 0; i < count; i++) {
+        const ang = baseAng + (i - (count - 1) / 2) * 0.16;
+        spawnProjectile(world, {
+          x: e.x + e.w / 2,
+          y: e.y + e.h * 0.4,
+          vx: Math.cos(ang) * 430,
+          vy: Math.sin(ang) * 430,
+          r: 9, life: 3,
+          friendly: false,
+          source: e,
+        });
+      }
+      burst(world, e.x + e.w / 2, e.y + e.h * 0.4, 20, '#ff8a6a', 1.2);
+    }
+  } else if (e.st === 'sprayFire') {
+    e.vx = 0;
+    if (e.t <= 0) { e.st = 'chase'; e.t = e.enrage ? 1.4 : 2.2; }
+  }
+
+  if (e.contactCd <= 0) {
+    for (const pl of Object.values(world.players)) {
+      if (pl.dead || pl.downed) continue;
+      if (aabb(pl, e)) {
+        damagePlayer(world, pl, e.dmg * 0.6, dir, e, 'contact');
+        e.contactCd = 1.0;
+        break;
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Снаряды                                                             */
+/* ------------------------------------------------------------------ */
+
+function updateProjectiles(world, dt) {
+  for (const [id, b] of Object.entries(world.projectiles)) {
+    const px = b.x;
+    const py = b.y;
+
+    // Самонаведение посоха + улучшение, меняющее цель уже после выстрела.
+    if (b.friendly && ((b.homing || 0) > 0 || (b.retarget || 0) > 0)) {
+      const range = b.retarget > 0
+        ? Math.max(b.homing > 0 ? 900 : 0, 320 + b.retarget * 180)
+        : Infinity;
+      const range2 = range * range;
+      let target = null;
+      let bestD = Infinity;
+      for (const e of Object.values(world.enemies)) {
+        if (!e.alive) continue;
+        if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
+        const ecx = e.x + e.w / 2;
+        const ecy = e.y + e.h / 2;
+        if (lineBlocked(b.x, b.y, ecx, ecy, 1)) continue;
+        const d = dist2(b.x, b.y, ecx, ecy);
+        if (d <= range2 && d < bestD) { bestD = d; target = e; }
+      }
+      if (target) {
+        const turnRate = Math.max(
+          b.homing || 0,
+          b.retarget > 0 ? 3.8 + b.retarget * 1.9 : 0,
+        );
+        steerProjectile(b, target, turnRate, dt);
+      }
+    }
+
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+
+    let dead = b.life <= 0;
+    if (!dead && (b.x < 0 || b.x > ARENA.w || b.y < 0 || b.y > ARENA.h)) dead = true;
+
+    // Непрерывная проверка стен: быстрая пуля не перелетает платформу.
+    let wallT = Infinity;
+    for (const s of SOLIDS) {
+      const t = segmentBoxT(px, py, b.x, b.y, s, b.r);
+      if (t !== null && t < wallT) wallT = t;
+    }
+
+    if (!dead && b.friendly) {
+      // Собираем все попадания на отрезке за тик и обрабатываем по порядку.
+      const hits = [];
+      for (const e of Object.values(world.enemies)) {
+        if (!e.alive) continue;
+        if (b._hitEnemies && b._hitEnemies.has(e.id)) continue;
+        const t = segmentBoxT(px, py, b.x, b.y, enemyHurtbox(e), b.r);
+        if (t !== null && t <= wallT + 1e-6) hits.push({ e, t });
+      }
+      hits.sort((a, c) => a.t - c.t);
+      for (const hit of hits) {
+        if (dead) break;
+        const e = hit.e;
+        damageEnemy(world, e, b.damage, Math.sign(b.vx) || 1, b.source || null, b.critBonus || 0);
+        if (b._hitEnemies) b._hitEnemies.add(e.id);
+        if (b.pierce > 0) b.pierce--;
+        else dead = true;
+      }
+    }
+
+    if (!dead && !b.friendly) {
+      let hitT = Infinity;
+      let hitP = null;
+      for (const p of Object.values(world.players)) {
+        if (p.dead || p.downed) continue;
+        const t = segmentBoxT(px, py, b.x, b.y, p, b.r);
+        if (t !== null && t < hitT) { hitT = t; hitP = p; }
+      }
+      if (hitP && hitT <= wallT + 1e-6) {
+        damagePlayer(world, hitP, b.damage || 8, Math.sign(b.vx) || 1, b.source || null, 'projectile');
+        dead = true;
+      }
+    }
+
+    if (!dead && wallT !== Infinity) dead = true;
+
+    if (dead) {
+      burst(world, b.x, b.y, 5, b.friendly ? '#b79cff' : '#ff8a6a', 0.55);
+      delete world.projectiles[id];
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Дроп и опыт                                                         */
+/* ------------------------------------------------------------------ */
+
+const DROP_TABLE = {
+  boss: { coins: 20, xp: 120, orbs: 8 },
+  brute: { coins: 5, xp: 24, orbs: 3 },
+  shielder: { coins: 5, xp: 22, orbs: 2 },
+  summoner: { coins: 6, xp: 26, orbs: 3 },
+  splitter: { coins: 5, xp: 18, orbs: 2 },
+  healer: { coins: 4, xp: 16, orbs: 2 },
+  sniper: { coins: 3, xp: 12, orbs: 1 },
+  thrower: { coins: 3, xp: 12, orbs: 1 },
+  bomber: { coins: 3, xp: 10, orbs: 1 },
+  flyer: { coins: 2, xp: 9, orbs: 1 },
+  runner: { coins: 2, xp: 7, orbs: 1 },
+  grunt: { coins: 2, xp: 7, orbs: 1 },
+  spawnling: { coins: 1, xp: 4, orbs: 1 },
+};
+
+function spawnDrops(world, x, y, enemy) {
+  const drop = DROP_TABLE[enemy.type] || DROP_TABLE.grunt;
+  const coinCount = drop.coins;
+  for (let i = 0; i < coinCount; i++) {
+    world.pickups.push({
+      id: 'k' + world.nextId++,
+      type: 'coin',
+      x: x + (Math.random() - 0.5) * 16,
+      y: y + (Math.random() - 0.5) * 10,
+      vx: (Math.random() - 0.5) * 260,
+      vy: -160 - Math.random() * 130,
+      r: 6, value: 1, life: 0,
+      bob: Math.random() * 6.283,
+      magnet: false,
+    });
+  }
+  const xpMult = 1 + world.wave * 0.04;
+  const xpVal = drop.xp * xpMult;
+  const orbCount = drop.orbs;
+  for (let i = 0; i < orbCount; i++) {
+    world.pickups.push({
+      id: 'k' + world.nextId++,
+      type: 'xp',
+      x: x + (Math.random() - 0.5) * 16,
+      y: y + (Math.random() - 0.5) * 10,
+      vx: (Math.random() - 0.5) * 200,
+      vy: -170 - Math.random() * 110,
+      r: 7,
+      value: Math.max(1, Math.round(xpVal / orbCount)),
+      life: 0,
+      bob: Math.random() * 6.283,
+      magnet: false,
+    });
+  }
+}
+
+function updatePickups(world, dt) {
+  const alive = Object.values(world.players).filter((p) => !p.dead && !p.downed);
+  if (!alive.length) return;
+
+  for (let i = world.pickups.length - 1; i >= 0; i--) {
+    const k = world.pickups[i];
+    k.life += dt;
+
+    let near = null;
+    let nearD2 = Infinity;
+    for (const p of alive) {
+      const d2 = dist2(p.x + p.w / 2, p.y + p.h / 2, k.x, k.y);
+      if (d2 < nearD2) { nearD2 = d2; near = p; }
+    }
+    if (!near) continue;
+
+    const magnetRange = world.phase === 'clear' ? 2000 : (near.magnetRange || 170);
+    if (!k.magnet && k.life > 0.3 && nearD2 < magnetRange * magnetRange) k.magnet = true;
+
+    const cx = near.x + near.w / 2;
+    const cy = near.y + near.h / 2;
+    const dx = cx - k.x;
+    const dy = cy - k.y;
+    const d2 = dx * dx + dy * dy;
+
+    if (d2 < 27 * 27) {
+      if (k.type === 'coin') {
+        const gain = Math.max(1, Math.round(k.value * (near.coinMult || 1)));
+        world.coins += gain;
+        world.stats.coinsEarned += gain;
+      } else {
+        gainXp(world, k.value * near.xpMult, near);
+      }
+      burst(world, k.x, k.y, 4, k.type === 'coin' ? '#e8c15a' : '#7fe0a0', 0.45);
+      world.pickups.splice(i, 1);
+      continue;
+    }
+
+    if (k.magnet) {
+      const dist = Math.sqrt(d2);
+      if (dist > 0.5) {
+        k.x += dx / dist * 840 * dt;
+        k.y += dy / dist * 840 * dt;
+      }
+    } else {
+      k.vy += 1400 * dt;
+      k.x += k.vx * dt;
+      k.y += k.vy * dt;
+      const floorY = ARENA.floorY - k.r;
+      if (k.y > floorY) {
+        k.y = floorY;
+        k.vy *= -0.38;
+        k.vx *= 0.72;
+        if (Math.abs(k.vy) < 60) k.vy = 0;
+      }
+      if (k.x < ARENA.wall + k.r) { k.x = ARENA.wall + k.r; k.vx = Math.abs(k.vx) * 0.6; }
+      else if (k.x > ARENA.w - ARENA.wall - k.r) { k.x = ARENA.w - ARENA.wall - k.r; k.vx = -Math.abs(k.vx) * 0.6; }
+    }
+  }
+}
+
+function gainXp(world, v, player) {
+  world.xp += v;
+  while (world.xp >= world.xpNext) {
+    world.xp -= world.xpNext;
+    world.level += 1;
+    world.xpNext = Math.round(world.xpNext * 1.2 + 5);
+    for (const p of Object.values(world.players)) {
+      if (p.dead) continue;
+      p.maxHp += 10;
+      if (!p.downed) p.hp = p.maxHp;
+      p.damage += 2;
+      p.shootDamage += 1.5;
+    }
+    const first = Object.values(world.players)[0];
+    if (first) burst(world, first.x, first.y, 24, '#7fe0a0', 1.2);
+    world.shake = Math.max(world.shake, 8);
+    world.levelFlash = 0.55;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Волны                                                               */
+/* ------------------------------------------------------------------ */
+
+function spawnWave(world, n) {
+  const list = [];
+  if (n > 0 && n % 5 === 0) {
+    list.push('boss');
+    const minions = Math.min(1 + Math.floor(n / 5), 4);
+    for (let i = 0; i < minions; i++) list.push('grunt');
+    if (n >= 10) list.push('flyer');
+    if (n >= 15) list.push('sniper');
+    if (n >= 20) list.push('healer');
+  } else {
+    const solo = !!world.solo;
+    const extra = Math.max(0, (world.playerCount || 1) - 2);
+    const grunts = Math.min(
+      (solo ? 1 : 2) + Math.floor(n * (solo ? 0.7 : 0.9)) + (solo ? 0 : extra),
+      solo ? 6 : 12,
+    );
+    const brutes = n >= 3
+      ? Math.min(Math.floor((n - 1) * 0.5) + (solo ? 0 : extra), solo ? 2 : 4)
+      : 0;
+    const throwers = n >= 3
+      ? Math.min(Math.floor(n / 4) + 1 + (solo ? 0 : Math.floor(extra / 2)), solo ? 1 : 3)
+      : 0;
+    const runners = n >= 2 ? Math.min(1 + Math.floor((n - 2) / 5), 2) : 0;
+    const shielders = n >= 4 ? Math.min(1 + Math.floor((n - 4) / 8), 1) : 0;
+    const flyers = n >= 5 ? Math.min(1 + Math.floor((n - 5) / 7), 2) : 0;
+    const bombers = n >= 6 ? Math.min(1 + Math.floor((n - 6) / 9), 2) : 0;
+    const healers = n >= 7 ? Math.min(1 + Math.floor((n - 7) / 10), 1) : 0;
+    const snipers = n >= 8 ? Math.min(1 + Math.floor((n - 8) / 10), 1) : 0;
+    const summoners = n >= 9 ? Math.min(1 + Math.floor((n - 9) / 12), 1) : 0;
+    const splitters = n >= 10 ? Math.min(1 + Math.floor((n - 10) / 12), 1) : 0;
+
+    for (let i = 0; i < grunts; i++) list.push('grunt');
+    for (let i = 0; i < brutes; i++) list.push('brute');
+    for (let i = 0; i < throwers; i++) list.push('thrower');
+    for (let i = 0; i < runners; i++) list.push('runner');
+    for (let i = 0; i < shielders; i++) list.push('shielder');
+    for (let i = 0; i < flyers; i++) list.push('flyer');
+    for (let i = 0; i < bombers; i++) list.push('bomber');
+    for (let i = 0; i < healers; i++) list.push('healer');
+    for (let i = 0; i < snipers; i++) list.push('sniper');
+    for (let i = 0; i < summoners; i++) list.push('summoner');
+    for (let i = 0; i < splitters; i++) list.push('splitter');
+  }
+
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+  }
+
+  world.pending = list.map((type, i) => {
+    const sp = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+    return { type, x: sp.x, y: sp.y, t: 0.15 + i * 0.35 };
+  });
+}
+
+function updateWaves(world, dt) {
+  if (world.phase === 'intermission') {
+    world.waveTimer -= dt;
+    if (world.waveTimer <= 0) {
+      world.wave += 1;
+      spawnWave(world, world.wave);
+      world.phase = 'fight';
+      world.waveTimer = 0;
+      for (const p of Object.values(world.players)) p.damageThisWave = 0;
+      const isBoss = world.wave % 5 === 0;
+      if (isBoss) showBanner(world, 'БОСС', 'ВОЛНА ' + world.wave, '#ff6b6b');
+      else showBanner(world, 'ВОЛНА ' + world.wave, '', isBoss ? '#ffd54f' : '#e8eef7');
+    }
+    return;
+  }
+
+  if (world.phase === 'clear') {
+    world.clearTimer -= dt;
+    if (world.clearTimer <= 0) openShop(world);
+    return;
+  }
+
+  if (world.phase !== 'fight') return;
+
+  world.waveTimer += dt;
+
+  for (const item of world.pending) item.t -= dt;
+
+  const activeEnemies = Object.values(world.enemies).filter((e) => e.alive).length;
+  if (activeEnemies < MAX_ACTIVE_ENEMIES) {
+    for (let i = 0; i < world.pending.length; i++) {
+      if (world.pending[i].t <= 0) {
+        createEnemy(world, world.pending[i]);
+        world.pending.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  const total = Object.values(world.enemies).filter((e) => e.alive).length + world.pending.length;
+  if (world.waveTimer > WAVE_TIME_LIMIT || total === 0) {
+    world.enemies = {};
+    world.pending = [];
+    world.waveTimer = 0;
+    world.wavesCleared += 1;
+    world.coins += 12;
+    world.stats.coinsEarned += 12;
+    for (const p of Object.values(world.players)) {
+      if (!p.dead) p.hp = p.maxHp;
+      if (p.interest > 0 && world.coins > 0) {
+        const bonus = Math.round(world.coins * p.interest);
+        world.coins += bonus;
+        world.stats.coinsEarned += bonus;
+      }
+    }
+    world.score += 120 * world.wave;
+    showBanner(world, 'ВОЛНА ПРОЙДЕНА', '', '#4affa0');
+    world.phase = 'clear';
+    world.clearTimer = 1.2;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Магазин                                                             */
+/* ------------------------------------------------------------------ */
+
+export function openShop(world) {
+  world.status = 'shop';
+  world.phase = 'shop';
+  world.banner.t = 0;
+  for (const p of Object.values(world.players)) {
+    if (p.dead) continue;
+    p.shopOffers = rollOffers(world.wave, p.shopLevels, p);
+    p.ready = false;
+  }
+}
+
+export function buyOffer(world, playerId, index) {
+  if (world.status !== 'shop') return false;
+  const p = world.players[playerId];
+  if (!p || p.dead) return false;
+  const offer = p.shopOffers[index];
+  if (!offer || offer.purchased) return false;
+  const price = offerPrice(p, offer);
+  if (world.coins < price) return false;
+  world.coins -= price;
+  const mult = RARITY_MULT[offer.rarity] || 1;
+  offer.upg.apply(p, mult);
+  p.shopLevels[offer.upg.id] = (p.shopLevels[offer.upg.id] || 0) + 1;
+  offer.purchased = true;
+  return true;
+}
+
+export function setReady(world, playerId) {
+  if (world.status !== 'shop') return;
+  const p = world.players[playerId];
+  if (!p || p.dead) return;
+  p.ready = true;
+  checkAllReady(world);
+}
+
+function checkAllReady(world) {
+  const alive = Object.values(world.players).filter((p) => !p.dead);
+  if (!alive.length) return;
+  if (alive.every((p) => p.ready)) {
+    world.status = 'playing';
+    world.phase = 'intermission';
+    world.waveTimer = 1.5;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Тик                                                                 */
+/* ------------------------------------------------------------------ */
+
+export function step(world, inputs, dt) {
+  if (world.status === 'game_over') return;
+  if (world.status === 'shop') {
+    updateEffects(world, dt);
+    return;
+  }
+  if (world.hitStop > 0) {
+    world.hitStop = Math.max(0, world.hitStop - dt);
+    updateEffects(world, dt);
+    return;
+  }
+
+  world.time += dt;
+
+  // Нокдаун / подъём
+  for (const p of Object.values(world.players)) {
+    if (!p.downed) continue;
+    p.downedTimer -= dt;
+    if (p.downedTimer <= 0) {
+      p.downed = false;
+      p.dead = true;
+      burst(world, p.x + p.w / 2, p.y + p.h / 2, 24, '#ff3030', 1.4);
+      world.shake = 12;
+      continue;
+    }
+    let beingRevived = false;
+    for (const other of Object.values(world.players)) {
+      if (other === p || other.dead || other.downed) continue;
+      const d2 = dist2(
+        other.x + other.w / 2, other.y + other.h / 2,
+        p.x + p.w / 2, p.y + p.h / 2,
+      );
+      if (d2 < REVIVE_RANGE * REVIVE_RANGE) { beingRevived = true; break; }
+    }
+    if (beingRevived) {
+      p.reviveProgress += dt / REVIVE_TIME;
+      if (p.reviveProgress >= 1) {
+        p.downed = false;
+        p.reviveProgress = 0;
+        p.hp = p.maxHp * REVIVE_HP_PCT;
+        p.invuln = 1.5;
+        p.downedTimer = 0;
+        burst(world, p.x + p.w / 2, p.y + p.h / 2, 24, '#4affa0', 1.4);
+        world.shake = 8;
+      }
+    } else {
+      p.reviveProgress = Math.max(0, p.reviveProgress - dt * 0.5);
+    }
+  }
+
+  for (const p of Object.values(world.players)) {
+    if (p.dead) continue;
+    p.intent = inputs[p.id] || emptyInput();
+    if (!p.downed) {
+      if (p.intent.swap && !p._prevSwap) trySwitch(p);
+      if (p.intent.dash) tryDash(world, p);
+      if (p.intent.attack) tryAttack(world, p);
+    }
+    p._prevSwap = !!p.intent.swap;
+    updatePlayerPhysics(world, p, dt);
+  }
+
+  updateEnemies(world, dt);
+  updateProjectiles(world, dt);
+  updatePickups(world, dt);
+  updateWaves(world, dt);
+  updateEffects(world, dt);
+
+  for (const p of Object.values(world.players)) if (!p.dead) fixInsideWall(p);
+  for (const e of Object.values(world.enemies)) if (e.alive) fixInsideWall(e);
+
+  const active = Object.values(world.players).filter((p) => !p.dead);
+  const nonDowned = active.filter((p) => !p.downed);
+  if (!active.length || !nonDowned.length) {
+    world.status = 'game_over';
+    world.phase = 'game_over';
+    world.stats = {
+      wave: world.wave,
+      kills: world.stats.kills,
+      damage: Math.round(world.stats.damage),
+      coinsEarned: world.stats.coinsEarned,
+      comboBest: world.comboBest,
+      score: world.score,
+      time: Math.round(world.time),
+    };
+  }
+}

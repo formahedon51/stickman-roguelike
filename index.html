@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Untitled X</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="hud-card player-card">
+    <div class="pc-top">
+      <span id="classIcon" class="pc-class-icon">⚔</span>
+      <span id="playerName" class="pc-name">Игрок</span>
+      <span id="botBadge" class="bot-badge hidden">БОТ</span>
+      <span id="hpText" class="pc-hp">100/100</span>
+    </div>
+    <div class="hpbar"><i id="hpFill"></i></div>
+    <div id="shieldWrap" class="shieldbar hidden"><i id="shieldFill"></i></div>
+    <div class="pc-xp">
+      <span class="lvl">LV <b id="lvlNum">1</b></span>
+      <div class="xpbar"><i id="xpFill"></i></div>
+      <span id="xpNum">0/30</span>
+    </div>
+    <div class="pc-weapon">
+      <span id="weaponIcon" class="pw-icon">⚔</span>
+      <span id="weaponLbl">МЕЧ</span>
+      <span id="swapHint" class="pw-hint">Q ⇄</span>
+    </div>
+  </div>
+
+  <div id="centerHud">
+    <div id="waveLbl">ВОЛНА 1</div>
+    <div id="enemyLbl">ВРАГОВ 0</div>
+    <div id="comboLbl"></div>
+  </div>
+
+  <div class="hud-card right-card">
+    <div class="hud-stat"><span class="hs-icon">◆</span><b id="coinLbl">0</b></div>
+    <div class="hud-stat"><span class="hs-icon">★</span><b id="scoreLbl">0</b></div>
+    <div class="hud-row">
+      <button id="speedBtn" class="hud-btn hidden" type="button" title="Скорость бота">×1</button>
+      <button id="pauseBtn" class="hud-btn" type="button" title="Пауза (Esc)">II</button>
+      <button id="muteBtn" class="hud-btn" type="button" title="Звук (M)">🔊</button>
+      <button id="btnLeave" class="hud-btn" type="button">В МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<div id="bossBar" class="hidden">
+  <div id="bossLabel">БОСС</div>
+  <div class="bossbar"><i id="bossHp"></i></div>
+</div>
+
+<div id="menu" class="overlay show">
+  <div class="menu-box">
+    <h1>UNTITLED <span>X</span></h1>
+    <p class="sub">Рогалик · классы · оружие · прокачка</p>
+
+    <div class="class-picker" id="classPicker"></div>
+
+    <div class="fields">
+      <label>ИМЯ
+        <input id="nameInput" maxlength="14" placeholder="Игрок" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="buttons">
+      <button id="btnSolo" class="primary" type="button">▶ ИГРАТЬ</button>
+      <button id="btnBot" class="alt" type="button">🤖 БОТ-ЗАБЕГ</button>
+      <button id="btnHelp" class="alt" type="button">? УПРАВЛЕНИЕ</button>
+    </div>
+
+    <div id="menuStatus"></div>
+
+    <div class="note">
+      Одиночный забег. Выбери класс, переживи волны и собери арсенал.
+      В режиме <b>БОТ-ЗАБЕГ</b> настроенный бот сам проходит игру — можно ускорить и наблюдать.
+    </div>
+
+    <div class="keys">A/D — движение · Space — прыжок · Shift — рывок · J — атака · Q — смена оружия</div>
+  </div>
+</div>
+
+<div id="shop" class="overlay">
+  <div class="menu-box">
+    <h1>МАГАЗИН</h1>
+    <p class="sub">6 слотов улучшений и новое оружие между волнами.</p>
+    <div id="shopCoins">◆ 0</div>
+    <div class="shop-grid" id="shopOffers"></div>
+    <div id="shopStatus"></div>
+    <div class="buttons">
+      <button id="btnShopReady" class="primary" type="button">ГОТОВ [ПРОБЕЛ]</button>
+    </div>
+  </div>
+</div>
+
+<div id="tutorial" class="overlay">
+  <div class="menu-box">
+    <h1>УПРАВЛЕНИЕ</h1>
+    <div class="tut-body">
+      <div class="tut-col">
+        <h3>КЛАВИАТУРА</h3>
+        <div class="row"><b>A / D / ← →</b> — движение</div>
+        <div class="row"><b>W / Space / ↑</b> — прыжок</div>
+        <div class="row"><b>Shift</b> — рывок (неуязвимость)</div>
+        <div class="row"><b>J / Z</b> — атака текущим оружием</div>
+        <div class="row"><b>Q / E</b> — следующее оружие из арсенала</div>
+        <div class="row"><b>1–6 / Space</b> — магазин</div>
+        <div class="row"><b>Esc / P</b> — пауза</div>
+      </div>
+      <div class="tut-col">
+        <h3>ТЕЛЕФОН</h3>
+        <div class="row"><b>◀ ▶</b> — движение</div>
+        <div class="row"><b>▲</b> — прыжок</div>
+        <div class="row"><b>⚔</b> — атака</div>
+        <div class="row"><b>⇄</b> — смена оружия</div>
+        <div class="row"><b>≫</b> — рывок</div>
+      </div>
+    </div>
+    <div class="tut-tips">
+      <b>Советы:</b> у каждого класса свой арсенал · в магазине можно докупить оружие ·
+      босс каждые 5 волн · одновременно до 15 врагов · криты, щит, казнь и умные снаряды — в прокачке ·
+      «БОТ-ЗАБЕГ» показывает, как играет умный бот.
+    </div>
+    <div class="buttons"><button id="btnTutorialOk" class="primary" type="button">ПОНЯТНО</button></div>
+  </div>
+</div>
+
+<div id="pause" class="overlay">
+  <div class="menu-box">
+    <h1>ПАУЗА</h1>
+    <p class="sub">Игра приостановлена.</p>
+    <div class="buttons">
+      <button id="btnResume" class="primary" type="button">ПРОДОЛЖИТЬ</button>
+      <button id="btnPauseMenu" class="alt" type="button">В МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<div id="gameover" class="overlay">
+  <div class="menu-box">
+    <h1>ЗАБЕГ ОКОНЧЕН</h1>
+    <div id="goStats"></div>
+    <div class="buttons">
+      <button id="btnRestart" class="primary" type="button">ЗАНОВО</button>
+      <button id="btnGoMenu" class="alt" type="button">В МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<div id="touchControls" class="hidden">
+  <div class="tc-left">
+    <button class="tc-btn tc-jump" data-act="jump" type="button"><span class="tc-icon">▲</span></button>
+    <div class="tc-move">
+      <button class="tc-btn" data-act="left" type="button"><span class="tc-icon">◀</span></button>
+      <button class="tc-btn" data-act="right" type="button"><span class="tc-icon">▶</span></button>
+    </div>
+  </div>
+  <div class="tc-right">
+    <button class="tc-btn tc-atk" data-act="attack" type="button"><span class="tc-icon">⚔</span><span class="tc-label">АТАКА</span></button>
+    <button class="tc-btn tc-swap" data-act="swap" type="button"><span class="tc-icon">⇄</span><span class="tc-label">ОРУЖИЕ</span></button>
+    <button class="tc-btn tc-dash" data-act="dash" type="button"><span class="tc-icon">≫</span><span class="tc-label">РЫВОК</span></button>
+  </div>
+</div>
+
+<script type="module" src="js/main.js?v=20261123c"></script>
+</body>
+</html>
